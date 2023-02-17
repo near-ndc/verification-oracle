@@ -1,0 +1,13 @@
+{
+  "port": 8080,
+  "verificationProvider": {
+      "url": "https://rpc.fuse.io/" 
+  },
+  "signer": {
+      "credentials": {
+          "seckey": "",
+          "pubkey": ""
+      },
+      "expirationTimeout": 600000
+  }
+}
