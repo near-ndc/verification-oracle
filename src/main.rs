@@ -36,12 +36,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let state = AppState::new(config.clone(), contract_addr)?;
 
-    let cors = CorsLayer::new().allow_origin(AllowOrigin::predicate(
-        |origin: &http::HeaderValue, request_parts: &http::request::Parts| {
-            println!("Origin: {:?} Parts: {:?}", origin, request_parts);
-            true
-        },
-    )); //.allow_origin(Any);
+    let cors = CorsLayer::new()
+        .allow_methods(Any)
+        .allow_origin(AllowOrigin::predicate(
+            |origin: &http::HeaderValue, request_parts: &http::request::Parts| {
+                println!("Origin: {:?} Parts: {:?}", origin, request_parts);
+                true
+            },
+        )); //.allow_origin(Any);
 
     let app = Router::new()
         .route("/verify", post(verify))
