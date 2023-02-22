@@ -11,7 +11,7 @@ use hex::ToHex;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::str::FromStr;
-use tower_http::cors::{Any, AllowOrigin, CorsLayer};
+use tower_http::cors::CorsLayer;
 use web3::signing::{hash_message, recover};
 use web3::types::Address;
 
@@ -36,19 +36,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let state = AppState::new(config.clone(), contract_addr)?;
 
-    let cors = CorsLayer::new()
-        .allow_methods(Any)
-        .allow_origin(AllowOrigin::predicate(
-            |origin: &http::HeaderValue, request_parts: &http::request::Parts| {
-                println!("Origin: {:?} Parts: {:?}", origin, request_parts);
-                true
-            },
-        )); //.allow_origin(Any);
-
     let app = Router::new()
         .route("/verify", post(verify))
-        .with_state(state)
-        .layer(cors);
+        .layer(CorsLayer::permissive())
+        .with_state(state);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], config.port));
     tracing::debug!("Server listening on {}", addr);
