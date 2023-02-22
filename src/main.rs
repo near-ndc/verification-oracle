@@ -11,7 +11,7 @@ use hex::ToHex;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::str::FromStr;
-use tower_http::cors::{AllowOrigin, CorsLayer};
+use tower_http::cors::{Any, AllowOrigin, CorsLayer};
 use web3::signing::{hash_message, recover};
 use web3::types::Address;
 
