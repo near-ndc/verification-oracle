@@ -31,7 +31,7 @@ impl FuseClient {
         let contract = Contract::from_json(
             web3.eth(),
             address,
-            include_bytes!("../interfaces/identity.json"),
+            include_bytes!("../interfaces/Identity.json"),
         )?;
 
         Ok(Self { contract })
