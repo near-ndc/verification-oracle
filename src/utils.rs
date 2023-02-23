@@ -56,8 +56,11 @@ pub fn enable_logging() {
     tracing::subscriber::set_global_default(subscriber).unwrap();
 }
 
-pub fn parse_hex_signature(hex_text: String) -> Result<[u8; 65], hex::FromHexError> {
-    let hex_text = hex_text.strip_prefix("0x").unwrap_or(&hex_text);
+pub fn parse_hex_signature<T>(hex_text: &str) -> Result<T, hex::FromHexError>
+where
+    T: FromHex<Error = hex::FromHexError>,
+{
+    let hex_text = hex_text.strip_prefix("0x").unwrap_or(hex_text);
 
-    <[u8; 65]>::from_hex(hex_text)
+    <T>::from_hex(hex_text)
 }

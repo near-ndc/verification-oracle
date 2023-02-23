@@ -5,6 +5,8 @@ mod utils;
 mod verification_provider;
 
 use axum::{extract::State, routing::post, Json, Router};
+use base64::{engine::general_purpose, Engine};
+use borsh::{BorshDeserialize, BorshSerialize};
 use chrono::{Duration, Utc};
 use error::AppError;
 use hex::ToHex;
@@ -92,11 +94,9 @@ pub struct Account {
     pub value: String,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(BorshSerialize, BorshDeserialize, Debug)]
 pub struct VerifiedAccountToken {
-    #[serde(rename = "a")]
     pub account: String,
-    #[serde(rename = "e")]
     pub expire_at: u64,
 }
 
@@ -115,7 +115,7 @@ pub async fn verify(
     tracing::debug!("Req: {:?}", req);
 
     let raw_signature =
-        parse_hex_signature(req.signature).map_err(|_| AppError::SignatureInvalid)?;
+        parse_hex_signature::<[u8; 65]>(&req.signature).map_err(|_| AppError::SignatureInvalid)?;
     let raw_message = req.message.as_bytes();
 
     // TODO: verify nonce
@@ -161,11 +161,14 @@ fn create_verified_account_response(
     let expire_at = Utc::now() + Duration::milliseconds(config.signer.expiration_timeout);
     let credentials = &config.signer.credentials;
     let signer = signer::Signer::new();
-    let message = serde_json::to_string(&VerifiedAccountToken {
-        account,
-        expire_at: expire_at.timestamp_millis() as u64,
-    })
-    .map_err(|_| AppError::SigningError)?;
+    let message = general_purpose::STANDARD.encode(
+        VerifiedAccountToken {
+            account,
+            expire_at: expire_at.timestamp_millis() as u64,
+        }
+        .try_to_vec()
+        .map_err(|_| AppError::SigningError)?,
+    );
 
     let signature = signer
         .sign(&credentials.seckey, message.as_bytes())
@@ -185,12 +188,58 @@ fn create_verified_account_response(
 
 #[cfg(test)]
 mod tests {
-    use crate::{User, VerificationReq};
+    use crate::signer::{self, SignerConfig, SignerCredentials};
+    use crate::utils::parse_hex_signature;
+    use crate::{
+        create_verified_account_response, AppConfig, User, VerificationReq, VerifiedAccountToken,
+    };
+    use assert_matches::assert_matches;
+    use base64::{engine::general_purpose, Engine};
+    use borsh::BorshDeserialize;
 
     #[test]
     fn test_verification_req_parser() {
         let req = serde_json::from_str::<VerificationReq>(r#"{"m":"{\"I\":{\"value\":\"Ukraine\",\"attestation\":\"\"},\"n\":{\"value\":\"Oleksandr Molotsylo\",\"attestation\":\"\"},\"e\":{\"value\":\"motzart66@gmail.com\",\"attestation\":\"\"},\"m\":{\"value\":\"\",\"attestation\":\"\"},\"a\":{\"value\":\"0xd6Bd36ce6f5e53da4eb7f83522441008F3A8644c\",\"attestation\":\"\"},\"v\":{\"value\":false,\"attestation\":\"\"},\"nonce\":{\"value\":1676466734313,\"attestation\":\"\"}}","sig":"0x6cc861240b8f90f06ea519a536ceda0df7507518e87d3de13cfdeabc600dea531562a6fb8c8beba80d8b87384898679176df0a514be116d7c6c3c47a628e7d161b"}"#).unwrap();
 
         let _ = serde_json::from_str::<User>(&req.message).unwrap();
+    }
+
+    #[test]
+    fn test_create_verified_account_response() {
+        let config = AppConfig {
+            signer: SignerConfig {
+                credentials: SignerCredentials {
+                    seckey: "32b0d170954d5ac0df55b5984b892909714d0df54d0a074ece47fd90a24f202f"
+                        .to_owned(),
+                    pubkey: "03e5b435f45697266c340564fcf71b1201473410412aa0b18bfb7a9e9d4bdc9547"
+                        .to_owned(),
+                },
+                expiration_timeout: 600_000,
+            },
+            ..Default::default()
+        };
+
+        let account = "test".to_owned();
+        let res = create_verified_account_response(&config, account.clone()).unwrap();
+
+        let credentials = &config.signer.credentials;
+        let signer = signer::Signer::new();
+
+        signer
+            .verify(
+                res.message.as_bytes(),
+                parse_hex_signature::<[u8; 64]>(&res.signature).unwrap(),
+                &credentials.pubkey,
+            )
+            .unwrap();
+
+        let decoded_msg = VerifiedAccountToken::try_from_slice(
+            &general_purpose::STANDARD.decode(&res.message).unwrap(),
+        )
+        .unwrap();
+        assert_matches!(decoded_msg, VerifiedAccountToken {
+            account: account_res,
+            expire_at: _
+        } if account_res == account);
     }
 }
