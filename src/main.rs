@@ -6,10 +6,11 @@ mod verification_provider;
 
 use axum::{extract::State, routing::post, Json, Router};
 use base64::{engine::general_purpose, Engine};
-use borsh::{BorshDeserialize, BorshSerialize};
 use chrono::{Duration, Utc};
 use error::AppError;
 use hex::ToHex;
+use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
+use near_sdk::AccountId;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::str::FromStr;
@@ -79,6 +80,8 @@ impl AppState {
 pub struct VerificationReq {
     #[serde(rename = "m")]
     pub message: String,
+    #[serde(rename = "c")]
+    pub claimer: AccountId,
     #[serde(rename = "sig")]
     pub signature: String,
 }
@@ -96,7 +99,8 @@ pub struct Account {
 
 #[derive(BorshSerialize, BorshDeserialize, Debug)]
 pub struct VerifiedAccountToken {
-    pub account: String,
+    pub claimer: AccountId,
+    pub ext_account: String,
     pub expire_at: u64,
 }
 
@@ -126,7 +130,7 @@ pub async fn verify(
     let account_addr =
         Address::from_str(&user.account.value).map_err(|_| AppError::UserAddressInvalid)?;
 
-    let recovered_account = recover(
+    let recovered_ext_account = recover(
         hash_message(raw_message).as_bytes(),
         &raw_signature[..64],
         raw_signature[64] as i32 - 27,
@@ -134,9 +138,12 @@ pub async fn verify(
     .map(|account| ["0x", &account.as_bytes().encode_hex::<String>()].concat())
     .map_err(|_| AppError::SignatureInvalid)?;
 
-    tracing::debug!("User account address to verify: {:?}", recovered_account);
+    tracing::debug!(
+        "User account address to verify: {:?}",
+        recovered_ext_account
+    );
 
-    if recovered_account != user.account.value.to_lowercase() {
+    if recovered_ext_account != user.account.value.to_lowercase() {
         return Err(AppError::SignatureInvalid);
     }
 
@@ -145,7 +152,9 @@ pub async fn verify(
 
     match state.client.is_whitelisted(account_addr).await {
         // Account is verified
-        Ok(true) => create_verified_account_response(&state.config, recovered_account),
+        Ok(true) => {
+            create_verified_account_response(&state.config, req.claimer, recovered_ext_account)
+        }
         // Account is not verified
         Ok(false) => Err(AppError::UserNotVerified),
         // Any contract failure
@@ -156,14 +165,16 @@ pub async fn verify(
 /// Creates signed json response with verified account
 fn create_verified_account_response(
     config: &AppConfig,
-    account: String,
+    claimer: AccountId,
+    ext_account: String,
 ) -> Result<Json<SignedResponse>, AppError> {
     let expire_at = Utc::now() + Duration::milliseconds(config.signer.expiration_timeout);
     let credentials = &config.signer.credentials;
     let signer = signer::Signer::new();
     let message = general_purpose::STANDARD.encode(
         VerifiedAccountToken {
-            account,
+            claimer,
+            ext_account,
             expire_at: expire_at.timestamp_millis() as u64,
         }
         .try_to_vec()
@@ -195,11 +206,12 @@ mod tests {
     };
     use assert_matches::assert_matches;
     use base64::{engine::general_purpose, Engine};
-    use borsh::BorshDeserialize;
+    use near_sdk::borsh::BorshDeserialize;
+    use near_sdk::AccountId;
 
     #[test]
     fn test_verification_req_parser() {
-        let req = serde_json::from_str::<VerificationReq>(r#"{"m":"{\"I\":{\"value\":\"Ukraine\",\"attestation\":\"\"},\"n\":{\"value\":\"Oleksandr Molotsylo\",\"attestation\":\"\"},\"e\":{\"value\":\"motzart66@gmail.com\",\"attestation\":\"\"},\"m\":{\"value\":\"\",\"attestation\":\"\"},\"a\":{\"value\":\"0xd6Bd36ce6f5e53da4eb7f83522441008F3A8644c\",\"attestation\":\"\"},\"v\":{\"value\":false,\"attestation\":\"\"},\"nonce\":{\"value\":1676466734313,\"attestation\":\"\"}}","sig":"0x6cc861240b8f90f06ea519a536ceda0df7507518e87d3de13cfdeabc600dea531562a6fb8c8beba80d8b87384898679176df0a514be116d7c6c3c47a628e7d161b"}"#).unwrap();
+        let req = serde_json::from_str::<VerificationReq>(r#"{"m":"{\"I\":{\"value\":\"Ukraine\",\"attestation\":\"\"},\"n\":{\"value\":\"Oleksandr Molotsylo\",\"attestation\":\"\"},\"e\":{\"value\":\"motzart66@gmail.com\",\"attestation\":\"\"},\"m\":{\"value\":\"\",\"attestation\":\"\"},\"a\":{\"value\":\"0xd6Bd36ce6f5e53da4eb7f83522441008F3A8644c\",\"attestation\":\"\"},\"v\":{\"value\":false,\"attestation\":\"\"},\"nonce\":{\"value\":1676466734313,\"attestation\":\"\"}}","c":"test.near","sig":"0x6cc861240b8f90f06ea519a536ceda0df7507518e87d3de13cfdeabc600dea531562a6fb8c8beba80d8b87384898679176df0a514be116d7c6c3c47a628e7d161b"}"#).unwrap();
 
         let _ = serde_json::from_str::<User>(&req.message).unwrap();
     }
@@ -219,8 +231,10 @@ mod tests {
             ..Default::default()
         };
 
-        let account = "test".to_owned();
-        let res = create_verified_account_response(&config, account.clone()).unwrap();
+        let claimer = AccountId::new_unchecked("test.near".to_owned());
+        let ext_account = "test".to_owned();
+        let res = create_verified_account_response(&config, claimer.clone(), ext_account.clone())
+            .unwrap();
 
         let credentials = &config.signer.credentials;
         let signer = signer::Signer::new();
@@ -238,8 +252,9 @@ mod tests {
         )
         .unwrap();
         assert_matches!(decoded_msg, VerifiedAccountToken {
-            account: account_res,
+            claimer: claimer_res,
+            ext_account: ext_account_res,
             expire_at: _
-        } if account_res == account);
+        } if claimer_res == claimer && ext_account_res == ext_account);
     }
 }
