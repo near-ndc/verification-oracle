@@ -8,10 +8,10 @@ use web3::{
     Web3,
 };
 
-use serde::Deserialize;
+use near_sdk::serde::Deserialize;
 
 #[derive(Deserialize, Debug, Default, Clone)]
-#[serde(rename_all = "camelCase")]
+#[serde(crate = "near_sdk::serde", rename_all = "camelCase")]
 pub struct VerificationProviderConfig {
     pub url: String,
 }

@@ -9,9 +9,10 @@ use base64::{engine::general_purpose, Engine};
 use chrono::{Duration, Utc};
 use error::AppError;
 use hex::ToHex;
+use near_crypto::Signature;
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
+use near_sdk::serde::{Deserialize, Serialize};
 use near_sdk::AccountId;
-use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::str::FromStr;
 use tower_http::cors::CorsLayer;
@@ -35,7 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let contract_addr = *IDENTITY_CONTRACT_ADDRESS;
 
     // initialize tracing
-    let config = config::load_config().unwrap();
+    let config = config::load_config()?;
 
     let state = AppState::new(config.clone(), contract_addr)?;
 
@@ -77,6 +78,7 @@ impl AppState {
 }
 
 #[derive(Deserialize, Debug)]
+#[serde(crate = "near_sdk::serde")]
 pub struct VerificationReq {
     #[serde(rename = "m")]
     pub message: String,
@@ -87,12 +89,14 @@ pub struct VerificationReq {
 }
 
 #[derive(Deserialize, Debug)]
+#[serde(crate = "near_sdk::serde")]
 pub struct User {
     #[serde(rename = "a")]
     pub account: Account,
 }
 
 #[derive(Deserialize, Debug)]
+#[serde(crate = "near_sdk::serde")]
 pub struct Account {
     pub value: String,
 }
@@ -105,11 +109,12 @@ pub struct VerifiedAccountToken {
 }
 
 #[derive(Serialize, Debug)]
+#[serde(crate = "near_sdk::serde")]
 pub struct SignedResponse {
     #[serde(rename = "m")]
     pub message: String,
     #[serde(rename = "sig")]
-    pub signature: String,
+    pub signature: Signature,
 }
 
 pub async fn verify(
@@ -124,8 +129,8 @@ pub async fn verify(
 
     // TODO: verify nonce
 
-    let user =
-        serde_json::from_str::<User>(&req.message).map_err(|_| AppError::SignatureInvalid)?;
+    let user = near_sdk::serde_json::from_str::<User>(&req.message)
+        .map_err(|_| AppError::SignatureInvalid)?;
 
     let account_addr =
         Address::from_str(&user.account.value).map_err(|_| AppError::UserAddressInvalid)?;
@@ -170,7 +175,6 @@ fn create_verified_account_response(
 ) -> Result<Json<SignedResponse>, AppError> {
     let expire_at = Utc::now() + Duration::milliseconds(config.signer.expiration_timeout);
     let credentials = &config.signer.credentials;
-    let signer = signer::Signer::new();
     let message = general_purpose::STANDARD.encode(
         VerifiedAccountToken {
             claimer,
@@ -181,26 +185,19 @@ fn create_verified_account_response(
         .map_err(|_| AppError::SigningError)?,
     );
 
-    let signature = signer
-        .sign(&credentials.seckey, message.as_bytes())
-        .map_err(|_| AppError::SigningError)?
-        .serialize_compact();
+    let signature = credentials.seckey.sign(message.as_bytes());
 
     // TODO: should we verify signed message before response?
-    signer
-        .verify(message.as_bytes(), signature, &credentials.pubkey)
-        .map_err(|_| AppError::SigningError)?;
+    if !signature.verify(message.as_bytes(), &credentials.pubkey) {
+        return Err(AppError::SigningError);
+    }
 
-    Ok(Json(SignedResponse {
-        message,
-        signature: signature.encode_hex::<String>(),
-    }))
+    Ok(Json(SignedResponse { message, signature }))
 }
 
 #[cfg(test)]
 mod tests {
     use crate::signer::{self, SignerConfig, SignerCredentials};
-    use crate::utils::parse_hex_signature;
     use crate::{
         create_verified_account_response, AppConfig, User, VerificationReq, VerifiedAccountToken,
     };
@@ -211,24 +208,21 @@ mod tests {
 
     #[test]
     fn test_verification_req_parser() {
-        let req = serde_json::from_str::<VerificationReq>(r#"{"m":"{\"I\":{\"value\":\"Ukraine\",\"attestation\":\"\"},\"n\":{\"value\":\"Oleksandr Molotsylo\",\"attestation\":\"\"},\"e\":{\"value\":\"motzart66@gmail.com\",\"attestation\":\"\"},\"m\":{\"value\":\"\",\"attestation\":\"\"},\"a\":{\"value\":\"0xd6Bd36ce6f5e53da4eb7f83522441008F3A8644c\",\"attestation\":\"\"},\"v\":{\"value\":false,\"attestation\":\"\"},\"nonce\":{\"value\":1676466734313,\"attestation\":\"\"}}","c":"test.near","sig":"0x6cc861240b8f90f06ea519a536ceda0df7507518e87d3de13cfdeabc600dea531562a6fb8c8beba80d8b87384898679176df0a514be116d7c6c3c47a628e7d161b"}"#).unwrap();
+        let req = near_sdk::serde_json::from_str::<VerificationReq>(r#"{"m":"{\"I\":{\"value\":\"Ukraine\",\"attestation\":\"\"},\"n\":{\"value\":\"Oleksandr Molotsylo\",\"attestation\":\"\"},\"e\":{\"value\":\"motzart66@gmail.com\",\"attestation\":\"\"},\"m\":{\"value\":\"\",\"attestation\":\"\"},\"a\":{\"value\":\"0xd6Bd36ce6f5e53da4eb7f83522441008F3A8644c\",\"attestation\":\"\"},\"v\":{\"value\":false,\"attestation\":\"\"},\"nonce\":{\"value\":1676466734313,\"attestation\":\"\"}}","c":"test.near","sig":"0x6cc861240b8f90f06ea519a536ceda0df7507518e87d3de13cfdeabc600dea531562a6fb8c8beba80d8b87384898679176df0a514be116d7c6c3c47a628e7d161b"}"#).unwrap();
 
-        let _ = serde_json::from_str::<User>(&req.message).unwrap();
+        let _ = near_sdk::serde_json::from_str::<User>(&req.message).unwrap();
     }
 
     #[test]
     fn test_create_verified_account_response() {
+        let (seckey, pubkey) = signer::generate_keys();
         let config = AppConfig {
             signer: SignerConfig {
-                credentials: SignerCredentials {
-                    seckey: "32b0d170954d5ac0df55b5984b892909714d0df54d0a074ece47fd90a24f202f"
-                        .to_owned(),
-                    pubkey: "03e5b435f45697266c340564fcf71b1201473410412aa0b18bfb7a9e9d4bdc9547"
-                        .to_owned(),
-                },
+                credentials: SignerCredentials { seckey, pubkey },
                 expiration_timeout: 600_000,
             },
-            ..Default::default()
+            port: Default::default(),
+            verification_provider: Default::default(),
         };
 
         let claimer = AccountId::new_unchecked("test.near".to_owned());
@@ -237,15 +231,10 @@ mod tests {
             .unwrap();
 
         let credentials = &config.signer.credentials;
-        let signer = signer::Signer::new();
 
-        signer
-            .verify(
-                res.message.as_bytes(),
-                parse_hex_signature::<[u8; 64]>(&res.signature).unwrap(),
-                &credentials.pubkey,
-            )
-            .unwrap();
+        assert!(res
+            .signature
+            .verify(res.message.as_bytes(), &credentials.pubkey,));
 
         let decoded_msg = VerifiedAccountToken::try_from_slice(
             &general_purpose::STANDARD.decode(&res.message).unwrap(),

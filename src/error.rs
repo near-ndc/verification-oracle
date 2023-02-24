@@ -1,5 +1,5 @@
 use axum::{http::StatusCode, response::IntoResponse, Json};
-use serde_json::json;
+use near_sdk::serde_json::json;
 
 #[derive(Debug)]
 pub enum AppError {

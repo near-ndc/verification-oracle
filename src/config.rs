@@ -1,10 +1,10 @@
 use crate::signer::SignerConfig;
 use crate::verification_provider::VerificationProviderConfig;
 use config::{self, ConfigError};
-use serde::Deserialize;
+use near_sdk::serde::Deserialize;
 
-#[derive(Deserialize, Debug, Default, Clone)]
-#[serde(rename_all = "camelCase")]
+#[derive(Deserialize, Debug, Clone)]
+#[serde(crate = "near_sdk::serde", rename_all = "camelCase")]
 pub struct AppConfig {
     pub port: u16,
     pub verification_provider: VerificationProviderConfig,
