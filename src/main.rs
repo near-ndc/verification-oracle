@@ -13,7 +13,6 @@ use near_crypto::Signature;
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::serde::{Deserialize, Serialize};
 use near_sdk::AccountId;
-use std::net::SocketAddr;
 use std::str::FromStr;
 use tower_http::cors::CorsLayer;
 use web3::signing::{hash_message, recover};
@@ -37,6 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // initialize tracing
     let config = config::load_config()?;
+    let addr = config.listen_address.parse().expect("Can't parse socket address");
 
     let state = AppState::new(config.clone(), contract_addr)?;
 
@@ -45,7 +45,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .layer(CorsLayer::permissive())
         .with_state(state);
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], config.port));
     tracing::debug!("Server listening on {}", addr);
 
     axum::Server::bind(&addr)
@@ -221,7 +220,7 @@ mod tests {
                 credentials: SignerCredentials { seckey, pubkey },
                 expiration_timeout: 600_000,
             },
-            port: Default::default(),
+            listen_address: "0.0.0.0:8080".to_owned(),
             verification_provider: Default::default(),
         };
 

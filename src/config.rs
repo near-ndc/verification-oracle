@@ -6,7 +6,7 @@ use near_sdk::serde::Deserialize;
 #[derive(Deserialize, Debug, Clone)]
 #[serde(crate = "near_sdk::serde", rename_all = "camelCase")]
 pub struct AppConfig {
-    pub port: u16,
+    pub listen_address: String,
     pub verification_provider: VerificationProviderConfig,
     pub signer: SignerConfig,
 }
