@@ -1,0 +1,24 @@
+version: "3.5"
+services:
+  gooddollar-oracle:
+    image: localhost:5000/gooddollar-oracle
+    restart: always
+    command:
+      - ./gooddollar-oracle
+    ports:
+      - 80:8080
+    extra_hosts: []
+    volumes:
+      - type: bind
+        source: /root/Projects/gooddollar-oracle/config/default.json
+        target: /app/config/default.json
+      - type: bind
+        source: /root/Projects/gooddollar-oracle/config/local.json
+        target: /app/config/local.json
+    deploy:
+      resources:
+        limits:
+          memory: 1000M
+    environment:
+      RUST_LOG: debug
+    init: false
