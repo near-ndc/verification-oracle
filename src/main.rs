@@ -36,7 +36,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // initialize tracing
     let config = config::load_config()?;
-    let addr = config.listen_address.parse().expect("Can't parse socket address");
+
+    // Log a base64 encoded ed25519 public key to be used in smart contract for signature verification
+    tracing::info!(
+        "ED25519 public key (base64 encoded): {}",
+        general_purpose::STANDARD.encode(
+            config
+                .signer
+                .credentials
+                .pubkey
+                .unwrap_as_ed25519()
+                .as_ref()
+        )
+    );
+
+    let addr = config
+        .listen_address
+        .parse()
+        .expect("Can't parse socket address");
 
     let state = AppState::new(config.clone(), contract_addr)?;
 
