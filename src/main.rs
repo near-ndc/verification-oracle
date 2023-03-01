@@ -50,6 +50,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
     );
 
+    //tracing::debug!(
+    //    "ED25519 private key (base64 encoded): {:?}",
+    //    general_purpose::STANDARD
+    //        .encode(&config.signer.credentials.seckey.unwrap_as_ed25519().0[..32])
+    //);
+
     let addr = config
         .listen_address
         .parse()
@@ -130,7 +136,7 @@ pub struct SignedResponse {
     #[serde(rename = "m")]
     pub message: String,
     #[serde(rename = "sig")]
-    pub signature: Signature,
+    pub signature_ed25519: String,
 }
 
 pub async fn verify(
@@ -191,24 +197,31 @@ fn create_verified_account_response(
 ) -> Result<Json<SignedResponse>, AppError> {
     let expire_at = Utc::now() + Duration::milliseconds(config.signer.expiration_timeout);
     let credentials = &config.signer.credentials;
-    let message = general_purpose::STANDARD.encode(
-        VerifiedAccountToken {
-            claimer,
-            ext_account,
-            expire_at: expire_at.timestamp_millis() as u64,
-        }
-        .try_to_vec()
-        .map_err(|_| AppError::SigningError)?,
-    );
+    let raw_message = VerifiedAccountToken {
+        claimer,
+        ext_account,
+        expire_at: expire_at.timestamp_millis() as u64,
+    }
+    .try_to_vec()
+    .map_err(|_| AppError::SigningError)?;
+    let signature = credentials.seckey.sign(&raw_message);
 
-    let signature = credentials.seckey.sign(message.as_bytes());
-
-    // TODO: should we verify signed message before response?
-    if !signature.verify(message.as_bytes(), &credentials.pubkey) {
+    if !signature.verify(&raw_message, &credentials.pubkey) {
         return Err(AppError::SigningError);
     }
 
-    Ok(Json(SignedResponse { message, signature }))
+    let raw_signature_ed25519 = match signature {
+        Signature::ED25519(signature) => signature.to_bytes(),
+        _ => return Err(AppError::SigningError),
+    };
+
+    let message = general_purpose::STANDARD.encode(&raw_message);
+    let signature_ed25519 = general_purpose::STANDARD.encode(raw_signature_ed25519);
+
+    Ok(Json(SignedResponse {
+        message,
+        signature_ed25519,
+    }))
 }
 
 #[cfg(test)]
@@ -219,6 +232,7 @@ mod tests {
     };
     use assert_matches::assert_matches;
     use base64::{engine::general_purpose, Engine};
+    use near_crypto::{KeyType, Signature};
     use near_sdk::borsh::BorshDeserialize;
     use near_sdk::AccountId;
 
@@ -248,14 +262,19 @@ mod tests {
 
         let credentials = &config.signer.credentials;
 
-        assert!(res
-            .signature
-            .verify(res.message.as_bytes(), &credentials.pubkey,));
+        let decoded_bytes = general_purpose::STANDARD.decode(&res.message).unwrap();
 
-        let decoded_msg = VerifiedAccountToken::try_from_slice(
-            &general_purpose::STANDARD.decode(&res.message).unwrap(),
+        assert!(Signature::from_parts(
+            KeyType::ED25519,
+            &general_purpose::STANDARD
+                .decode(&res.signature_ed25519)
+                .unwrap()
         )
-        .unwrap();
+        .unwrap()
+        .verify(&decoded_bytes, &credentials.pubkey));
+
+        let decoded_msg = VerifiedAccountToken::try_from_slice(&decoded_bytes).unwrap();
+
         assert_matches!(decoded_msg, VerifiedAccountToken {
             claimer: claimer_res,
             ext_account: ext_account_res,
