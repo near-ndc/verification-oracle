@@ -6,7 +6,7 @@ mod verification_provider;
 
 use axum::{extract::State, routing::post, Json, Router};
 use base64::{engine::general_purpose, Engine};
-use chrono::{Duration, Utc};
+use chrono::Utc;
 use error::AppError;
 use hex::ToHex;
 use near_crypto::Signature;
@@ -127,7 +127,7 @@ pub struct Account {
 pub struct VerifiedAccountToken {
     pub claimer: AccountId,
     pub ext_account: String,
-    pub expire_at: u64,
+    pub timestamp: u64,
 }
 
 #[derive(Serialize, Debug)]
@@ -195,12 +195,11 @@ fn create_verified_account_response(
     claimer: AccountId,
     ext_account: String,
 ) -> Result<Json<SignedResponse>, AppError> {
-    let expire_at = Utc::now() + Duration::milliseconds(config.signer.expiration_timeout);
     let credentials = &config.signer.credentials;
     let raw_message = VerifiedAccountToken {
         claimer,
         ext_account,
-        expire_at: expire_at.timestamp_millis() as u64,
+        timestamp: Utc::now().timestamp() as u64,
     }
     .try_to_vec()
     .map_err(|_| AppError::SigningError)?;
@@ -249,7 +248,6 @@ mod tests {
         let config = AppConfig {
             signer: SignerConfig {
                 credentials: SignerCredentials { seckey, pubkey },
-                expiration_timeout: 600_000,
             },
             listen_address: "0.0.0.0:8080".to_owned(),
             verification_provider: Default::default(),
@@ -278,7 +276,7 @@ mod tests {
         assert_matches!(decoded_msg, VerifiedAccountToken {
             claimer: claimer_res,
             ext_account: ext_account_res,
-            expire_at: _
+            timestamp: _
         } if claimer_res == claimer && ext_account_res == ext_account);
     }
 }

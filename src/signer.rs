@@ -5,7 +5,6 @@ use near_sdk::serde::Deserialize;
 #[serde(crate = "near_sdk::serde", rename_all = "camelCase")]
 pub struct SignerConfig {
     pub credentials: SignerCredentials,
-    pub expiration_timeout: i64,
 }
 
 #[derive(Deserialize, Debug, Clone)]
