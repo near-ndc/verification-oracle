@@ -7,7 +7,6 @@
       "credentials": {
           "seckey": "",
           "pubkey": ""
-      },
-      "expirationTimeout": 600000
+      }
   }
 }
