@@ -174,9 +174,6 @@ pub async fn verify(
         return Err(AppError::SignatureInvalid);
     }
 
-    // TODO: remove this
-    // let verified = state.client.is_whitelisted(Address::from_str("2909DE691E22eE927D6AC1Abb5d1B9b6CA7976f0").unwrap()).await;
-
     match state.client.is_whitelisted(account_addr).await {
         // Account is verified
         Ok(true) => {

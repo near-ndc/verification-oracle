@@ -19,7 +19,7 @@ pub struct VerificationProviderConfig {
 /// GoodDollar Identity contract address used to verify whitelisted users
 /// See more <https://github.com/GoodDollar/GoodProtocol/blob/master/releases/deployment.json>
 pub static IDENTITY_CONTRACT_ADDRESS: Lazy<Address> =
-    Lazy::new(|| Address::from_str("Fa8d865A962ca8456dF331D78806152d3aC5B84F").unwrap());
+    Lazy::new(|| Address::from_str("2F9C28de9e6d44b71B91b8BA337A5D82e308E7BE").unwrap());
 
 #[derive(Clone, Debug)]
 pub struct FuseClient {
