@@ -45,8 +45,8 @@ pub fn enable_logging() {
     // Setup subscriber to print out logs from tracing
     let subscriber = Registry::default().with(
         fmt::Layer::default()
-            // Enable colored output
-            .with_ansi(true)
+            // disable colored output
+            .with_ansi(false)
             // Write to console
             .with_writer(std::io::stdout)
             // Filter messages based on RUST_LOG env variable
