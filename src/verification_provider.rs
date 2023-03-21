@@ -16,6 +16,7 @@ pub struct VerificationProviderConfig {
     pub url: String,
 }
 
+// TODO: IDENTITY_CONTRACT_ADDRESS should be part of a config. Ideally we should also support testnet
 /// GoodDollar Identity contract address used to verify whitelisted users
 /// See more <https://github.com/GoodDollar/GoodProtocol/blob/master/releases/deployment.json>
 pub static IDENTITY_CONTRACT_ADDRESS: Lazy<Address> =
