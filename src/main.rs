@@ -20,7 +20,7 @@ use web3::types::Address;
 
 use crate::config::AppConfig;
 use utils::{enable_logging, parse_hex_signature, set_heavy_panic};
-use verification_provider::{FuseClient, IDENTITY_CONTRACT_ADDRESS};
+use verification_provider::FuseClient;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -59,7 +59,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .parse()
         .expect("Can't parse socket address");
 
-    let state = AppState::new(config.clone(), *IDENTITY_CONTRACT_ADDRESS)?;
+    let state = AppState::new(
+        config.clone(),
+        config.verification_provider.identity_contract_address,
+    )?;
 
     let app = Router::new()
         .route("/verify", post(verify))

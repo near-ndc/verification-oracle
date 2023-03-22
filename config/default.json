@@ -1,7 +1,8 @@
 {
   "listenAddress": "0.0.0.0:8080",
   "verificationProvider": {
-      "url": "https://rpc.fuse.io/" 
+      "url": "https://rpc.fuse.io/",
+      "identityContractAddress": "2F9C28de9e6d44b71B91b8BA337A5D82e308E7BE"
   },
   "signer": {
       "credentials": {
