@@ -42,17 +42,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             config
                 .signer
                 .credentials
-                .pubkey
+                .signing_key
+                .public_key()
                 .unwrap_as_ed25519()
                 .as_ref()
         )
     );
-
-    //tracing::debug!(
-    //    "ED25519 private key (base64 encoded): {:?}",
-    //    general_purpose::STANDARD
-    //        .encode(&config.signer.credentials.seckey.unwrap_as_ed25519().0[..32])
-    //);
 
     let addr = config
         .listen_address
@@ -201,9 +196,9 @@ fn create_verified_account_response(
     }
     .try_to_vec()
     .map_err(|_| AppError::SigningError)?;
-    let signature = credentials.seckey.sign(&raw_message);
+    let signature = credentials.signing_key.sign(&raw_message);
 
-    if !signature.verify(&raw_message, &credentials.pubkey) {
+    if !signature.verify(&raw_message, &credentials.signing_key.public_key()) {
         return Err(AppError::SigningError);
     }
 
@@ -223,7 +218,7 @@ fn create_verified_account_response(
 
 #[cfg(test)]
 mod tests {
-    use crate::signer::{self, SignerConfig, SignerCredentials};
+    use crate::signer::{SignerConfig, SignerCredentials};
     use crate::{
         create_verified_account_response, AppConfig, User, VerificationReq, VerifiedAccountToken,
     };
@@ -242,10 +237,10 @@ mod tests {
 
     #[test]
     fn test_create_verified_account_response() {
-        let (seckey, pubkey) = signer::generate_keys();
+        let signing_key = near_crypto::SecretKey::from_random(near_crypto::KeyType::ED25519);
         let config = AppConfig {
             signer: SignerConfig {
-                credentials: SignerCredentials { seckey, pubkey },
+                credentials: SignerCredentials { signing_key },
             },
             listen_address: "0.0.0.0:8080".to_owned(),
             verification_provider: Default::default(),
@@ -267,7 +262,7 @@ mod tests {
                 .unwrap()
         )
         .unwrap()
-        .verify(&decoded_bytes, &credentials.pubkey));
+        .verify(&decoded_bytes, &credentials.signing_key.public_key()));
 
         let decoded_msg = VerifiedAccountToken::try_from_slice(&decoded_bytes).unwrap();
 

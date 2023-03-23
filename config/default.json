@@ -5,9 +5,6 @@
       "identityContractAddress": "2F9C28de9e6d44b71B91b8BA337A5D82e308E7BE"
   },
   "signer": {
-      "credentials": {
-          "seckey": "",
-          "pubkey": ""
-      }
+    "credentials": null
   }
 }
