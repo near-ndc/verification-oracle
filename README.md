@@ -1,10 +1,14 @@
 # gooddollar-oracle
+
 GoodDollar oracle for SBT issuer.
 
 ## Configuration
 
-All default configuration is available in `default.json` config file. To override these settings a config file `local.jsom` could
-be used instead.
+All default configuration is available in `config/default.json` file.
+To override these settings, create a `config/local.jsom` file.
+
+The GoodDollar identities are whitelisted in the following [contract](https://explorer.fuse.io/address/0x2F9C28de9e6d44b71B91b8BA337A5D82e308E7BE/internal-transactions#address-tabs). We can query the address tab to see if it was whitelisted.
+A contract is whitelisted if it passes a Face verification.
 
 ### Credentials
 
