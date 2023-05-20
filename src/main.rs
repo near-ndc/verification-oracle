@@ -31,10 +31,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenv::dotenv().ok();
 
     enable_logging();
-
     let config = config::load_config()?;
 
-    // initialize tracing
     // Log a base64 encoded ed25519 public key to be used in smart contract for signature verification
     tracing::info!(
         "ED25519 public key (base64 encoded): {}",
