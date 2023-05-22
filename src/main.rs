@@ -8,19 +8,15 @@ use axum::{extract::State, routing::post, Json, Router};
 use base64::{engine::general_purpose, Engine};
 use chrono::Utc;
 use error::AppError;
-use hex::ToHex;
 use near_crypto::Signature;
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::serde::{Deserialize, Serialize};
 use near_sdk::AccountId;
-use std::str::FromStr;
 use tower_http::cors::CorsLayer;
-use web3::signing::{hash_message, recover};
-use web3::types::Address;
 
 use crate::config::AppConfig;
-use utils::{enable_logging, parse_hex_signature, set_heavy_panic};
-use verification_provider::FuseClient;
+use utils::{enable_logging, set_heavy_panic};
+use verification_provider::FractalClient;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -52,10 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .parse()
         .expect("Can't parse socket address");
 
-    let state = AppState::new(
-        config.clone(),
-        config.verification_provider.identity_contract_address,
-    )?;
+    let state = AppState::new(config.clone())?;
 
     let app = Router::new()
         .route("/verify", post(verify))
@@ -74,21 +67,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[derive(Clone)]
 pub struct AppState {
     pub config: AppConfig,
-    pub client: FuseClient,
+    pub client: FractalClient,
 }
 
 impl AppState {
-    pub fn new(
-        config: AppConfig,
-        contract_addr: Address,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
-        let web3 = web3::Web3::new(web3::transports::Http::new(
-            &config.verification_provider.url,
-        )?);
-
+    pub fn new(config: AppConfig) -> Result<Self, AppError> {
         Ok(Self {
+            client: FractalClient::create(config.verification_provider.clone())?,
             config,
-            client: FuseClient::create(&web3, contract_addr.to_owned())?,
         })
     }
 }
@@ -96,25 +82,9 @@ impl AppState {
 #[derive(Deserialize, Debug)]
 #[serde(crate = "near_sdk::serde")]
 pub struct VerificationReq {
-    #[serde(rename = "m")]
-    pub message: String,
-    #[serde(rename = "c")]
+    pub code: String,
     pub claimer: AccountId,
-    #[serde(rename = "sig")]
-    pub signature: String,
-}
-
-#[derive(Deserialize, Debug)]
-#[serde(crate = "near_sdk::serde")]
-pub struct User {
-    #[serde(rename = "a")]
-    pub account: Account,
-}
-
-#[derive(Deserialize, Debug)]
-#[serde(crate = "near_sdk::serde")]
-pub struct Account {
-    pub value: String,
+    pub redirect_uri: String,
 }
 
 #[derive(BorshSerialize, BorshDeserialize, Debug)]
@@ -139,44 +109,19 @@ pub async fn verify(
 ) -> Result<Json<SignedResponse>, AppError> {
     tracing::debug!("Req: {:?}", req);
 
-    let raw_signature =
-        parse_hex_signature::<[u8; 65]>(&req.signature).map_err(|_| AppError::SignatureInvalid)?;
-    let raw_message = req.message.as_bytes();
-
-    // TODO: verify nonce
-
-    let user = near_sdk::serde_json::from_str::<User>(&req.message)
-        .map_err(|_| AppError::SignatureInvalid)?;
-
-    let account_addr =
-        Address::from_str(&user.account.value).map_err(|_| AppError::UserAddressInvalid)?;
-
-    let recovered_ext_account = recover(
-        hash_message(raw_message).as_bytes(),
-        &raw_signature[..64],
-        raw_signature[64] as i32 - 27,
-    )
-    .map(|account| ["0x", &account.as_bytes().encode_hex::<String>()].concat())
-    .map_err(|_| AppError::SignatureInvalid)?;
-
-    tracing::debug!(
-        "User account address to verify: {:?}",
-        recovered_ext_account
-    );
-
-    if recovered_ext_account != user.account.value.to_lowercase() {
-        return Err(AppError::SignatureInvalid);
-    }
-
-    match state.client.is_whitelisted(account_addr).await {
-        // Account is verified
-        Ok(true) => {
-            create_verified_account_response(&state.config, req.claimer, recovered_ext_account)
+    let user = match state.client.fetch_user(req.code, req.redirect_uri).await {
+        Ok(user) => user,
+        Err(e) => {
+            tracing::error!("Unable to fetch user. Error: {:?}", e);
+            return Err(e);
         }
-        // Account is not verified
-        Ok(false) => Err(AppError::UserNotVerified),
-        // Any contract failure
-        Err(_) => Err(AppError::TransportProtocolError),
+    };
+
+    if state.client.verify(&user) {
+        // Account is verified
+        create_verified_account_response(&state.config, req.claimer, user.uid)
+    } else {
+        Err(AppError::UserNotVerified)
     }
 }
 
@@ -217,21 +162,12 @@ fn create_verified_account_response(
 #[cfg(test)]
 mod tests {
     use crate::signer::{SignerConfig, SignerCredentials};
-    use crate::{
-        create_verified_account_response, AppConfig, User, VerificationReq, VerifiedAccountToken,
-    };
+    use crate::{create_verified_account_response, AppConfig, VerifiedAccountToken};
     use assert_matches::assert_matches;
     use base64::{engine::general_purpose, Engine};
     use near_crypto::{KeyType, Signature};
     use near_sdk::borsh::BorshDeserialize;
     use near_sdk::AccountId;
-
-    #[test]
-    fn test_verification_req_parser() {
-        let req = near_sdk::serde_json::from_str::<VerificationReq>(r#"{"m":"{\"I\":{\"value\":\"Ukraine\",\"attestation\":\"\"},\"n\":{\"value\":\"Oleksandr Molotsylo\",\"attestation\":\"\"},\"e\":{\"value\":\"motzart66@gmail.com\",\"attestation\":\"\"},\"m\":{\"value\":\"\",\"attestation\":\"\"},\"a\":{\"value\":\"0xd6Bd36ce6f5e53da4eb7f83522441008F3A8644c\",\"attestation\":\"\"},\"v\":{\"value\":false,\"attestation\":\"\"},\"nonce\":{\"value\":1676466734313,\"attestation\":\"\"}}","c":"test.near","sig":"0x6cc861240b8f90f06ea519a536ceda0df7507518e87d3de13cfdeabc600dea531562a6fb8c8beba80d8b87384898679176df0a514be116d7c6c3c47a628e7d161b"}"#).unwrap();
-
-        let _ = near_sdk::serde_json::from_str::<User>(&req.message).unwrap();
-    }
 
     #[test]
     fn test_create_verified_account_response() {
