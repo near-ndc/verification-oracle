@@ -1,6 +1,6 @@
-use crate::{utils, AppError};
+use crate::{utils, AppError, VerificationReq};
 use chrono::{DateTime, Utc};
-use near_sdk::serde::Deserialize;
+use near_sdk::{serde::Deserialize, serde_json};
 use reqwest::Client;
 
 #[derive(Deserialize, Debug, Default, Clone)]
@@ -113,17 +113,24 @@ impl FractalClient {
         })
     }
 
-    pub async fn fetch_user(
-        &self,
-        auth_code: String,
-        redirect_uri: String,
-    ) -> Result<User, AppError> {
+    pub async fn verify(&self, req: &VerificationReq) -> Result<String, AppError> {
+        match self.fetch_user(&req.code, &req.redirect_uri).await {
+            Ok(user) if user.is_verified_uniqueness() => Ok(user.uid),
+            Ok(_) => Err(AppError::UserUniquenessNotVerified),
+            Err(e) => {
+                tracing::error!("Unable to fetch user. Error: {:?}", e);
+                Err(e)
+            }
+        }
+    }
+
+    async fn fetch_user(&self, auth_code: &str, redirect_uri: &str) -> Result<User, AppError> {
         let params: [(&str, &str); 5] = [
             ("client_id", &self.config.client_id),
             ("client_secret", &self.config.client_secret),
-            ("code", &auth_code),
+            ("code", auth_code),
             ("grant_type", "authorization_code"),
-            ("redirect_uri", &redirect_uri),
+            ("redirect_uri", redirect_uri),
         ];
 
         let data = self
@@ -135,7 +142,7 @@ impl FractalClient {
             .text()
             .await?;
 
-        match near_sdk::serde_json::from_str(&data) {
+        match serde_json::from_str(&data) {
             Ok(UserToken {
                 access_token,
                 token_type,
@@ -152,9 +159,11 @@ impl FractalClient {
             Err(_) => Err(format!("Failed to parse token response {:?}", data).into()),
         }
     }
+}
 
-    pub fn verify(&self, user: &User) -> bool {
-        user.verification_cases.iter().any(|case| {
+impl User {
+    fn is_verified_uniqueness(&self) -> bool {
+        self.verification_cases.iter().any(|case| {
             matches!(case,
                 VerificationCase {
                     level,
