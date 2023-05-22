@@ -109,20 +109,9 @@ pub async fn verify(
 ) -> Result<Json<SignedResponse>, AppError> {
     tracing::debug!("Req: {:?}", req);
 
-    let user = match state.client.fetch_user(req.code, req.redirect_uri).await {
-        Ok(user) => user,
-        Err(e) => {
-            tracing::error!("Unable to fetch user. Error: {:?}", e);
-            return Err(e);
-        }
-    };
+    let verified_user_id = state.client.verify(&req).await?;
 
-    if state.client.verify(&user) {
-        // Account is verified
-        create_verified_account_response(&state.config, req.claimer, user.uid)
-    } else {
-        Err(AppError::UserNotVerified)
-    }
+    create_verified_account_response(&state.config, req.claimer, verified_user_id)
 }
 
 /// Creates signed json response with verified account

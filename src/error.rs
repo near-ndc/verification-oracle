@@ -5,8 +5,8 @@ use near_sdk::serde_json::json;
 pub enum AppError {
     #[error("Signing error")]
     SigningError,
-    #[error("User not verified error")]
-    UserNotVerified,
+    #[error("User uniqueness is not verified error")]
+    UserUniquenessNotVerified,
     #[error("Http request timed out: {0}")]
     TimeoutError(String),
     #[error("Http request failed: {0}")]
@@ -19,7 +19,9 @@ impl IntoResponse for AppError {
     fn into_response(self) -> axum::response::Response {
         let (status, err_msg) = match self {
             Self::SigningError => (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
-            Self::UserNotVerified => (StatusCode::UNAUTHORIZED, "User didn't pass verification"),
+            Self::UserUniquenessNotVerified => {
+                (StatusCode::UNAUTHORIZED, "User didn't pass verification")
+            }
             Self::ReqwestError(_) | Self::Generic(_) | Self::TimeoutError(_) => {
                 (StatusCode::UNAUTHORIZED, "User verification failure")
             }
