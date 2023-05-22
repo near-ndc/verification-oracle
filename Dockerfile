@@ -48,5 +48,5 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y lsb-release ca-certificates libssl-dev && apt-get clean all
 
-COPY --from=builder /tmp/builder/target/release/gooddollar-oracle .
+COPY --from=builder /tmp/builder/target/release/verification-oracle .
 RUN mkdir -p ./config

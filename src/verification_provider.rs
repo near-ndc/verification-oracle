@@ -1,41 +1,170 @@
-use web3::{
-    contract::{self, Contract, Options},
-    ethabi,
-    transports::Http,
-    types::Address,
-    Web3,
-};
-
+use crate::{utils, AppError};
+use chrono::{DateTime, Utc};
 use near_sdk::serde::Deserialize;
+use reqwest::Client;
 
 #[derive(Deserialize, Debug, Default, Clone)]
 #[serde(crate = "near_sdk::serde", rename_all = "camelCase")]
 pub struct VerificationProviderConfig {
-    pub url: String,
-    /// GoodDollar Identity contract address used to verify whitelisted users
-    /// See more <https://github.com/GoodDollar/GoodProtocol/blob/master/releases/deployment.json>
-    pub identity_contract_address: Address,
+    pub request_token_url: String,
+    pub request_user_url: String,
+    pub client_id: String,
+    pub client_secret: String,
+}
+
+#[derive(Deserialize, Debug, Default, Clone)]
+#[serde(crate = "near_sdk::serde")]
+pub struct UserToken {
+    pub access_token: String,
+    pub token_type: String,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(crate = "near_sdk::serde")]
+pub struct User {
+    pub uid: String,
+    pub emails: Vec<Email>,
+    pub phones: Vec<Phone>,
+    pub wallets: Vec<Wallet>,
+    pub verification_cases: Vec<VerificationCase>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(crate = "near_sdk::serde")]
+pub struct Email {
+    pub address: String,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(crate = "near_sdk::serde")]
+pub struct Phone {
+    pub number: String,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(crate = "near_sdk::serde")]
+pub struct Wallet {
+    pub id: String,
+    pub address: String,
+    pub currency: String,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(crate = "near_sdk::serde")]
+pub struct VerificationCase {
+    pub id: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    #[serde(deserialize_with = "utils::de_strings_joined_by_plus")]
+    pub level: Vec<VerificationLevel>,
+    pub status: VerificationStatus,
+    pub credential: CredentialStatus,
+    pub details: VerificationDetails,
+}
+
+#[derive(Deserialize, Debug, PartialEq)]
+#[serde(crate = "near_sdk::serde", rename_all = "lowercase")]
+pub enum VerificationLevel {
+    Uniqueness,
+    Basic,
+    Plus,
+    Liveness,
+    Selfie,
+    Sow,
+    Telegram,
+    Twitter,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(crate = "near_sdk::serde", rename_all = "lowercase")]
+pub enum VerificationStatus {
+    Pending,
+    Contacted,
+    Done,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(crate = "near_sdk::serde", rename_all = "lowercase")]
+pub enum CredentialStatus {
+    Pending,
+    Approved,
+    Rejected,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(crate = "near_sdk::serde")]
+pub struct VerificationDetails {
+    pub liveness: bool,
 }
 
 #[derive(Clone, Debug)]
-pub struct FuseClient {
-    contract: Contract<Http>,
+pub struct FractalClient {
+    inner_client: Client,
+    config: VerificationProviderConfig,
 }
 
-impl FuseClient {
-    pub fn create(web3: &Web3<Http>, address: Address) -> Result<Self, ethabi::Error> {
-        let contract = Contract::from_json(
-            web3.eth(),
-            address,
-            include_bytes!("../interfaces/Identity.json"),
-        )?;
+impl FractalClient {
+    pub fn create(config: VerificationProviderConfig) -> Result<Self, AppError> {
+        let inner_client = Client::builder().pool_max_idle_per_host(0).build()?;
 
-        Ok(Self { contract })
+        Ok(Self {
+            inner_client,
+            config,
+        })
     }
 
-    pub async fn is_whitelisted(&self, account: Address) -> contract::Result<bool> {
-        self.contract
-            .query("isWhitelisted", (account,), None, Options::default(), None)
-            .await
+    pub async fn fetch_user(
+        &self,
+        auth_code: String,
+        redirect_uri: String,
+    ) -> Result<User, AppError> {
+        let params: [(&str, &str); 5] = [
+            ("client_id", &self.config.client_id),
+            ("client_secret", &self.config.client_secret),
+            ("code", &auth_code),
+            ("grant_type", "authorization_code"),
+            ("redirect_uri", &redirect_uri),
+        ];
+
+        let data = self
+            .inner_client
+            .post(&self.config.request_token_url)
+            .form(&params)
+            .send()
+            .await?
+            .text()
+            .await?;
+
+        match near_sdk::serde_json::from_str(&data) {
+            Ok(UserToken {
+                access_token,
+                token_type,
+            }) if token_type.as_str() == "Bearer" => self
+                .inner_client
+                .get(&self.config.request_user_url)
+                .bearer_auth(access_token)
+                .send()
+                .await?
+                .json::<User>()
+                .await
+                .map_err(AppError::from),
+            Ok(token) => Err(format!("Unsupported token type {:?}", token).into()),
+            Err(_) => Err(format!("Failed to parse token response {:?}", data).into()),
+        }
+    }
+
+    pub fn verify(&self, user: &User) -> bool {
+        user.verification_cases.iter().any(|case| {
+            matches!(case,
+                VerificationCase {
+                    level,
+                    status: VerificationStatus::Done,
+                    credential: CredentialStatus::Approved,
+                    ..
+                } if level
+                    .iter()
+                    .any(|level| level == &VerificationLevel::Uniqueness)
+            )
+        })
     }
 }

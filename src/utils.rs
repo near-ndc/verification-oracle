@@ -1,5 +1,8 @@
 use backtrace::Backtrace;
-use hex::FromHex;
+use near_sdk::{
+    serde::{de, Deserialize},
+    serde_json::Value,
+};
 use std::{panic, thread};
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::{fmt, EnvFilter, Registry};
@@ -56,11 +59,15 @@ pub fn enable_logging() {
     tracing::subscriber::set_global_default(subscriber).unwrap();
 }
 
-pub fn parse_hex_signature<T>(hex_text: &str) -> Result<T, hex::FromHexError>
+pub fn de_strings_joined_by_plus<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
 where
-    T: FromHex<Error = hex::FromHexError>,
+    D: de::Deserializer<'de>,
+    T: Deserialize<'de>,
 {
-    let hex_text = hex_text.strip_prefix("0x").unwrap_or(hex_text);
+    let levels = String::deserialize(deserializer)?
+        .split('+')
+        .filter_map(|level| T::deserialize(Value::from(level)).ok())
+        .collect();
 
-    <T>::from_hex(hex_text)
+    Ok(levels)
 }

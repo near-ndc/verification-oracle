@@ -1,18 +1,7 @@
 #+title: Production TODO list
 
 Infrastructure:
-+ need description about the setup
 + make sure we have a firewall
-+ internal documentation about the credentials
-
-Things to change:
-+ clear separation of errors vs warning
-  errors will trigger an alert
-  also, the errors captured by GCP should have color codes disabled
-+ we should enable to load key from env variable, rather than
-
-Style:
-+ no need to wrap the Account address (Hex String) into a User {a: String} object in the http Req. req.message can be just an address.
 
 Services to integrate with:
 + GCP Logging

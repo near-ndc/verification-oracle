@@ -1,19 +1,19 @@
 version: "3.5"
 services:
-  gooddollar-oracle:
-    image: localhost:5000/gooddollar-oracle
+  verification-oracle:
+    image: localhost:5000/verification-oracle
     restart: always
     command:
-      - ./gooddollar-oracle
+      - ./verification-oracle
     ports:
       - 80:8080
     extra_hosts: []
     volumes:
       - type: bind
-        source: /root/Projects/gooddollar-oracle/config/default.json
+        source: /root/Projects/verification-oracle/config/default.json
         target: /app/config/default.json
       - type: bind
-        source: /root/Projects/gooddollar-oracle/config/local.json
+        source: /root/Projects/verification-oracle/config/local.json
         target: /app/config/local.json
     deploy:
       resources:
