@@ -11,6 +11,8 @@ pub enum AppError {
     TimeoutError(String),
     #[error("Http request failed: {0}")]
     ReqwestError(reqwest::Error),
+    #[error("JSON parse failure: {0}")]
+    ParseError(#[from] near_sdk::serde_json::Error),
     #[error("Generic error: {0}")]
     Generic(String),
 }
@@ -18,7 +20,9 @@ pub enum AppError {
 impl IntoResponse for AppError {
     fn into_response(self) -> axum::response::Response {
         let (status, err_msg) = match self {
-            Self::SigningError => (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
+            Self::SigningError | Self::ParseError(_) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error")
+            }
             Self::UserUniquenessNotVerified => {
                 (StatusCode::UNAUTHORIZED, "User didn't pass verification")
             }

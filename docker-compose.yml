@@ -1,19 +1,41 @@
 version: "3.5"
 services:
-  verification-oracle:
+  verification-oracle-staging:
     image: localhost:5000/verification-oracle
     restart: always
     command:
       - ./verification-oracle
     ports:
-      - 80:8080
+      - 8081:8081
     extra_hosts: []
     volumes:
       - type: bind
         source: /root/Projects/verification-oracle/config/default.json
         target: /app/config/default.json
       - type: bind
-        source: /root/Projects/verification-oracle/config/local.json
+        source: /root/Projects/verification-oracle/config/staging.json
+        target: /app/config/local.json
+    deploy:
+      resources:
+        limits:
+          memory: 1000M
+    environment:
+      RUST_LOG: debug
+    init: false
+  verification-oracle-production:
+    image: localhost:5000/verification-oracle
+    restart: always
+    command:
+      - ./verification-oracle
+    ports:
+      - 8080:8080
+    extra_hosts: []
+    volumes:
+      - type: bind
+        source: /root/Projects/verification-oracle/config/default.json
+        target: /app/config/default.json
+      - type: bind
+        source: /root/Projects/verification-oracle/config/production.json
         target: /app/config/local.json
     deploy:
       resources:

@@ -16,7 +16,7 @@ use tower_http::cors::CorsLayer;
 
 use crate::config::AppConfig;
 use utils::{enable_logging, set_heavy_panic};
-use verification_provider::FractalClient;
+use verification_provider::{FractalClient, KycStatus, VerifiedUser};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -92,6 +92,7 @@ pub struct VerifiedAccountToken {
     pub claimer: AccountId,
     pub ext_account: String,
     pub timestamp: u64,
+    pub verified_kyc: bool,
 }
 
 #[derive(Serialize, Debug)]
@@ -101,6 +102,8 @@ pub struct SignedResponse {
     pub message: String,
     #[serde(rename = "sig")]
     pub signature_ed25519: String,
+    #[serde(rename = "kyc")]
+    pub kyc_status: KycStatus,
 }
 
 pub async fn verify(
@@ -109,22 +112,23 @@ pub async fn verify(
 ) -> Result<Json<SignedResponse>, AppError> {
     tracing::debug!("Req: {:?}", req);
 
-    let verified_user_id = state.client.verify(&req).await?;
+    let verified_user = state.client.verify(&req).await?;
 
-    create_verified_account_response(&state.config, req.claimer, verified_user_id)
+    create_verified_account_response(&state.config, req.claimer, verified_user)
 }
 
 /// Creates signed json response with verified account
 fn create_verified_account_response(
     config: &AppConfig,
     claimer: AccountId,
-    ext_account: String,
+    verified_user: VerifiedUser,
 ) -> Result<Json<SignedResponse>, AppError> {
     let credentials = &config.signer.credentials;
     let raw_message = VerifiedAccountToken {
         claimer,
-        ext_account,
+        ext_account: verified_user.user_id.clone(),
         timestamp: Utc::now().timestamp() as u64,
+        verified_kyc: verified_user.kyc_status == KycStatus::Approved,
     }
     .try_to_vec()
     .map_err(|_| AppError::SigningError)?;
@@ -142,15 +146,19 @@ fn create_verified_account_response(
     let message = general_purpose::STANDARD.encode(&raw_message);
     let signature_ed25519 = general_purpose::STANDARD.encode(raw_signature_ed25519);
 
+    tracing::debug!("Verification passed for {verified_user:?}");
+
     Ok(Json(SignedResponse {
         message,
         signature_ed25519,
+        kyc_status: verified_user.kyc_status,
     }))
 }
 
 #[cfg(test)]
 mod tests {
     use crate::signer::{SignerConfig, SignerCredentials};
+    use crate::verification_provider::{KycStatus, VerifiedUser};
     use crate::{create_verified_account_response, AppConfig, VerifiedAccountToken};
     use assert_matches::assert_matches;
     use base64::{engine::general_purpose, Engine};
@@ -159,7 +167,7 @@ mod tests {
     use near_sdk::AccountId;
 
     #[test]
-    fn test_create_verified_account_response() {
+    fn test_create_verified_account_response_no_kyc() {
         let signing_key = near_crypto::SecretKey::from_random(near_crypto::KeyType::ED25519);
         let config = AppConfig {
             signer: SignerConfig {
@@ -170,8 +178,11 @@ mod tests {
         };
 
         let claimer = AccountId::new_unchecked("test.near".to_owned());
-        let ext_account = "test".to_owned();
-        let res = create_verified_account_response(&config, claimer.clone(), ext_account.clone())
+        let verified_user = VerifiedUser {
+            user_id: "test".to_owned(),
+            kyc_status: KycStatus::Unavailable,
+        };
+        let res = create_verified_account_response(&config, claimer.clone(), verified_user.clone())
             .unwrap();
 
         let credentials = &config.signer.credentials;
@@ -192,7 +203,50 @@ mod tests {
         assert_matches!(decoded_msg, VerifiedAccountToken {
             claimer: claimer_res,
             ext_account: ext_account_res,
-            timestamp: _
-        } if claimer_res == claimer && ext_account_res == ext_account);
+            timestamp: _,
+            verified_kyc: false,
+        } if claimer_res == claimer && ext_account_res == verified_user.user_id);
+    }
+
+    #[test]
+    fn test_create_verified_account_response_with_kyc() {
+        let signing_key = near_crypto::SecretKey::from_random(near_crypto::KeyType::ED25519);
+        let config = AppConfig {
+            signer: SignerConfig {
+                credentials: SignerCredentials { signing_key },
+            },
+            listen_address: "0.0.0.0:8080".to_owned(),
+            verification_provider: Default::default(),
+        };
+
+        let claimer = AccountId::new_unchecked("test.near".to_owned());
+        let verified_user = VerifiedUser {
+            user_id: "test".to_owned(),
+            kyc_status: KycStatus::Approved,
+        };
+        let res = create_verified_account_response(&config, claimer.clone(), verified_user.clone())
+            .unwrap();
+
+        let credentials = &config.signer.credentials;
+
+        let decoded_bytes = general_purpose::STANDARD.decode(&res.message).unwrap();
+
+        assert!(Signature::from_parts(
+            KeyType::ED25519,
+            &general_purpose::STANDARD
+                .decode(&res.signature_ed25519)
+                .unwrap()
+        )
+        .unwrap()
+        .verify(&decoded_bytes, &credentials.signing_key.public_key()));
+
+        let decoded_msg = VerifiedAccountToken::try_from_slice(&decoded_bytes).unwrap();
+
+        assert_matches!(decoded_msg, VerifiedAccountToken {
+            claimer: claimer_res,
+            ext_account: ext_account_res,
+            timestamp: _,
+            verified_kyc: true,
+        } if claimer_res == claimer && ext_account_res == verified_user.user_id);
     }
 }
