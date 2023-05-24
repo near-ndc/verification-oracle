@@ -9,7 +9,6 @@ use reqwest::Client;
 #[derive(Deserialize, Debug, Default, Clone)]
 #[serde(crate = "near_sdk::serde", rename_all = "camelCase")]
 pub struct VerificationProviderConfig {
-    pub path: String,
     pub request_token_url: String,
     pub request_user_url: String,
     pub client_id: String,
