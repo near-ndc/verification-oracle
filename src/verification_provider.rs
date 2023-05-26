@@ -1,4 +1,4 @@
-use crate::{utils, AppError, VerificationReq};
+use crate::{utils, AppError, ExternalAccountId, VerificationReq};
 use chrono::{DateTime, Utc};
 use near_sdk::{
     serde::{Deserialize, Serialize},
@@ -25,7 +25,8 @@ pub struct UserToken {
 #[derive(Deserialize, Debug)]
 #[serde(crate = "near_sdk::serde")]
 pub struct User {
-    pub uid: String,
+    #[serde(deserialize_with = "utils::de_external_account_id_from_uuid")]
+    pub uid: ExternalAccountId,
     pub emails: Vec<Email>,
     pub phones: Vec<Phone>,
     pub wallets: Vec<Wallet>,
@@ -117,7 +118,7 @@ pub enum KycStatus {
 
 #[derive(Debug, Clone)]
 pub struct VerifiedUser {
-    pub user_id: String,
+    pub user_id: ExternalAccountId,
     pub kyc_status: KycStatus,
 }
 

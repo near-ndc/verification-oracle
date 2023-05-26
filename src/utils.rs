@@ -1,11 +1,14 @@
+use crate::ExternalAccountId;
 use backtrace::Backtrace;
 use near_sdk::{
     serde::{de, Deserialize},
     serde_json::Value,
 };
+use std::str::FromStr;
 use std::{panic, thread};
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::{fmt, EnvFilter, Registry};
+use uuid::Uuid;
 
 pub fn set_heavy_panic() {
     panic::set_hook(Box::new(|panic_info| {
@@ -70,4 +73,19 @@ where
         .collect();
 
     Ok(levels)
+}
+
+pub fn de_external_account_id_from_uuid<'de, D>(
+    deserializer: D,
+) -> Result<ExternalAccountId, D::Error>
+where
+    D: de::Deserializer<'de>,
+{
+    let uuid = Uuid::from_str(&String::deserialize(deserializer)?).map_err(|e| {
+        de::Error::custom(format!(
+            "Unable to deserialize external account id from uuid. Error: {e:?}"
+        ))
+    })?;
+
+    Ok(uuid.into())
 }

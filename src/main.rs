@@ -13,6 +13,7 @@ use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::serde::{Deserialize, Serialize};
 use near_sdk::AccountId;
 use tower_http::cors::CorsLayer;
+use uuid::Uuid;
 
 use crate::config::AppConfig;
 use utils::{enable_logging, set_heavy_panic};
@@ -90,9 +91,26 @@ pub struct VerificationReq {
 #[derive(BorshSerialize, BorshDeserialize, Debug)]
 pub struct VerifiedAccountToken {
     pub claimer: AccountId,
-    pub ext_account: String,
+    pub ext_account: ExternalAccountId,
     pub timestamp: u64,
     pub verified_kyc: bool,
+}
+
+/// External account id represented as hexadecimal string
+#[derive(BorshSerialize, BorshDeserialize, Debug, Clone, PartialEq)]
+pub struct ExternalAccountId(String);
+
+impl std::fmt::Display for ExternalAccountId {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl From<Uuid> for ExternalAccountId {
+    fn from(value: Uuid) -> Self {
+        let mut buf = [0u8; uuid::fmt::Simple::LENGTH];
+        Self(value.as_simple().encode_lower(&mut buf).to_owned())
+    }
 }
 
 #[derive(Serialize, Debug)]
@@ -162,9 +180,12 @@ mod tests {
     use crate::{create_verified_account_response, AppConfig, VerifiedAccountToken};
     use assert_matches::assert_matches;
     use base64::{engine::general_purpose, Engine};
+    use chrono::Utc;
     use near_crypto::{KeyType, Signature};
-    use near_sdk::borsh::BorshDeserialize;
+    use near_sdk::borsh::{BorshDeserialize, BorshSerialize};
     use near_sdk::AccountId;
+    use std::str::FromStr;
+    use uuid::Uuid;
 
     #[test]
     fn test_create_verified_account_response_no_kyc() {
@@ -179,7 +200,7 @@ mod tests {
 
         let claimer = AccountId::new_unchecked("test.near".to_owned());
         let verified_user = VerifiedUser {
-            user_id: "test".to_owned(),
+            user_id: Uuid::default().into(),
             kyc_status: KycStatus::Unavailable,
         };
         let res = create_verified_account_response(&config, claimer.clone(), verified_user.clone())
@@ -221,7 +242,7 @@ mod tests {
 
         let claimer = AccountId::new_unchecked("test.near".to_owned());
         let verified_user = VerifiedUser {
-            user_id: "test".to_owned(),
+            user_id: Uuid::default().into(),
             kyc_status: KycStatus::Approved,
         };
         let res = create_verified_account_response(&config, claimer.clone(), verified_user.clone())
@@ -248,5 +269,27 @@ mod tests {
             timestamp: _,
             verified_kyc: true,
         } if claimer_res == claimer && ext_account_res == verified_user.user_id);
+    }
+
+    #[test]
+    fn test_account_id_uuid_borsh_serde() {
+        let serialized = VerifiedAccountToken {
+            claimer: AccountId::new_unchecked("test.near".to_owned()),
+            ext_account: Uuid::from_str("f20181ba-fc0c-11ed-be56-0242ac120002")
+                .unwrap()
+                .into(),
+            timestamp: Utc::now().timestamp() as u64,
+            verified_kyc: true,
+        }
+        .try_to_vec()
+        .unwrap();
+
+        assert_eq!(
+            VerifiedAccountToken::try_from_slice(serialized.as_slice())
+                .unwrap()
+                .ext_account
+                .0,
+            "f20181bafc0c11edbe560242ac120002"
+        );
     }
 }
