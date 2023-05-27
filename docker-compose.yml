@@ -10,10 +10,10 @@ services:
     extra_hosts: []
     volumes:
       - type: bind
-        source: /root/Projects/verification-oracle/config/default.json
+        source: /root/Projects/verification-oracle/config/staging.json
         target: /app/config/default.json
       - type: bind
-        source: /root/Projects/verification-oracle/config/staging.json
+        source: /root/Projects/verification-oracle/config/staging-secrets.json
         target: /app/config/local.json
     deploy:
       resources:
@@ -32,10 +32,10 @@ services:
     extra_hosts: []
     volumes:
       - type: bind
-        source: /root/Projects/verification-oracle/config/default.json
+        source: /root/Projects/verification-oracle/config/production.json
         target: /app/config/default.json
       - type: bind
-        source: /root/Projects/verification-oracle/config/production.json
+        source: /root/Projects/verification-oracle/config/production-secrets.json
         target: /app/config/local.json
     deploy:
       resources:

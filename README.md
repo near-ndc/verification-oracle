@@ -51,6 +51,21 @@ Configuration keys explanation:
 
 ## Docker
 
+Sample of `*-secrets.json` configuration file:
+```
+{
+    "verificationProvider": {
+        "clientId": "{{SOME_CLIENT_ID_VALUE_HERE}}",
+        "clientSecret": "{{SOME_CLIENT_SECRET_VALUE_HERE}}"
+    },
+    "signer": {
+        "credentials": {
+            "signingKey": "{{SOME_ED25519_BASE64_ENCODED_PRIVATE_KEY_HERE}}"
+        }
+    }
+}
+```
+
 Build docker image
 `docker build -t verification-oracle . &`
 
