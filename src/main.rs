@@ -106,6 +106,12 @@ impl std::fmt::Display for ExternalAccountId {
     }
 }
 
+impl AsRef<String> for ExternalAccountId {
+    fn as_ref(&self) -> &String {
+        &self.0
+    }
+}
+
 impl From<Uuid> for ExternalAccountId {
     fn from(value: Uuid) -> Self {
         let mut buf = [0u8; uuid::fmt::Simple::LENGTH];
