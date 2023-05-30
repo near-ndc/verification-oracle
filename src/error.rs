@@ -15,6 +15,10 @@ pub enum AppError {
     ParseError(#[from] near_sdk::serde_json::Error),
     #[error("Generic error: {0}")]
     Generic(String),
+    #[error("Suspicious user didn't pass captcha verification")]
+    SuspiciousUser,
+    #[error("Captcha error: {0}")]
+    CaptchaError(#[from] crate::captcha::CaptchaError),
 }
 
 impl IntoResponse for AppError {
@@ -29,6 +33,8 @@ impl IntoResponse for AppError {
             Self::ReqwestError(_) | Self::Generic(_) | Self::TimeoutError(_) => {
                 (StatusCode::UNAUTHORIZED, "User verification failure")
             }
+            Self::CaptchaError(_) => (StatusCode::UNAUTHORIZED, "Captcha error"),
+            Self::SuspiciousUser => (StatusCode::UNAUTHORIZED, "Suspicous user"),
         };
         (status, Json(json!({ "error": err_msg }))).into_response()
     }

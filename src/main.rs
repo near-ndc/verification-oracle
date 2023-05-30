@@ -1,3 +1,4 @@
+mod captcha;
 mod config;
 mod error;
 mod signer;
@@ -6,6 +7,7 @@ mod verification_provider;
 
 use axum::{extract::State, routing::post, Json, Router};
 use base64::{engine::general_purpose, Engine};
+use captcha::CaptchaClient;
 use chrono::Utc;
 use error::AppError;
 use near_crypto::Signature;
@@ -69,11 +71,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 pub struct AppState {
     pub config: AppConfig,
     pub client: FractalClient,
+    pub captcha: CaptchaClient,
 }
 
 impl AppState {
     pub fn new(config: AppConfig) -> Result<Self, AppError> {
         Ok(Self {
+            captcha: CaptchaClient::new(config.captcha.clone())?,
             client: FractalClient::create(config.verification_provider.clone())?,
             config,
         })
@@ -86,6 +90,7 @@ pub struct VerificationReq {
     pub code: String,
     pub claimer: AccountId,
     pub redirect_uri: String,
+    pub captcha: String,
 }
 
 #[derive(BorshSerialize, BorshDeserialize, Debug)]
@@ -135,6 +140,18 @@ pub async fn verify(
     Json(req): Json<VerificationReq>,
 ) -> Result<Json<SignedResponse>, AppError> {
     tracing::debug!("Req: {:?}", req);
+
+    match state.captcha.verify(&req.captcha).await {
+        Ok(true) => (),
+        Ok(false) => return Err(AppError::SuspiciousUser),
+        Err(e) => {
+            tracing::error!(
+                "Captcha verification failure for account `{:?}`. Error: {e:?}",
+                req.claimer
+            );
+            return Err(AppError::from(e));
+        }
+    };
 
     let verified_user = state.client.verify(&req).await?;
 
@@ -202,6 +219,7 @@ mod tests {
             },
             listen_address: "0.0.0.0:8080".to_owned(),
             verification_provider: Default::default(),
+            captcha: Default::default(),
         };
 
         let claimer = AccountId::new_unchecked("test.near".to_owned());
@@ -244,6 +262,7 @@ mod tests {
             },
             listen_address: "0.0.0.0:8080".to_owned(),
             verification_provider: Default::default(),
+            captcha: Default::default(),
         };
 
         let claimer = AccountId::new_unchecked("test.near".to_owned());

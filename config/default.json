@@ -1,12 +1,17 @@
 {
   "listenAddress": "0.0.0.0:8080",
   "verificationProvider": {
-      "requestTokenUrl": "https://auth.fractal.id/oauth/token",
-      "requestUserUrl": "https://resource.fractal.id/users/me",
-      "clientId": null,
-      "clientSecret": null
+    "requestTokenUrl": "https://auth.fractal.id/oauth/token",
+    "requestUserUrl": "https://resource.fractal.id/users/me",
+    "clientId": null,
+    "clientSecret": null
   },
   "signer": {
     "credentials": null
+  },
+  "captcha": {
+    "action": "homepage",
+    "threshold": 0.5,
+    "secret": null
   }
 }

@@ -1,3 +1,4 @@
+use crate::captcha::CaptchaConfig;
 use crate::signer::SignerConfig;
 use crate::verification_provider::VerificationProviderConfig;
 use config::{self, ConfigError};
@@ -9,6 +10,7 @@ pub struct AppConfig {
     pub listen_address: String,
     pub verification_provider: VerificationProviderConfig,
     pub signer: SignerConfig,
+    pub captcha: CaptchaConfig,
 }
 
 pub fn load_config() -> Result<AppConfig, ConfigError> {
