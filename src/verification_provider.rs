@@ -133,7 +133,10 @@ impl FractalClient {
     }
 
     pub async fn verify(&self, req: &VerificationReq) -> Result<VerifiedUser, AppError> {
-        match self.fetch_user(&req.code, &req.redirect_uri).await {
+        let fetched = self.fetch_user(&req.code, &req.redirect_uri).await;
+        tracing::trace!("Fetched user {fetched:?}");
+
+        match fetched {
             Ok(mut user) if user.is_verified_uniqueness() => Ok(VerifiedUser {
                 kyc_status: user.get_kyc_status(),
                 user_id: user.uid,
