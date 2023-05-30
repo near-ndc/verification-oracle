@@ -3,5 +3,10 @@
   "verificationProvider": {
     "requestTokenUrl": "https://auth.next.fractal.id/oauth/token",
     "requestUserUrl": "https://resource.next.fractal.id/users/me"
+  },
+  "captcha": {
+    "action": "homepage",
+    "threshold": 0.5,
+    "secret": null
   }
 }
