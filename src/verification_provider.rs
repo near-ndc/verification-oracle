@@ -69,7 +69,9 @@ pub struct VerificationCase {
 #[derive(Deserialize, Debug, PartialEq)]
 #[serde(crate = "near_sdk::serde", rename_all = "lowercase")]
 pub enum VerificationLevel {
+    /// Face Verification
     Uniqueness,
+    /// KYC (always comes with Liveness)
     Basic,
     Plus,
     Liveness,
