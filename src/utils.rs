@@ -89,3 +89,36 @@ where
 
     Ok(uuid.into())
 }
+
+/// Checks if the provided named near account is an allowed sub-account
+///
+/// Requires to be an implicit account id or named sub-account from .near root
+pub fn is_allowed_named_sub_account(account_id: &near_sdk::AccountId) -> bool {
+    let number_of_dots = account_id.as_str().chars().fold(0, |mut acc, c| {
+        if c == '.' {
+            acc += 1;
+        }
+        acc
+    });
+
+    number_of_dots <= 1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_allowed_named_sub_account;
+    use near_sdk::AccountId;
+
+    #[test]
+    fn test_is_allowed_named_sub_account() {
+        assert!(is_allowed_named_sub_account(&AccountId::new_unchecked(
+            "28cda90838b6fa11b629747cf8173edc2d5bc010d1300d544f39cc19d4d69edb".to_owned()
+        )));
+        assert!(is_allowed_named_sub_account(&AccountId::new_unchecked(
+            "test.near".to_owned()
+        )));
+        assert!(!is_allowed_named_sub_account(&AccountId::new_unchecked(
+            "test1.test.near".to_owned()
+        )));
+    }
+}

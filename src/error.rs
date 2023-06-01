@@ -17,6 +17,8 @@ pub enum AppError {
     Generic(String),
     #[error("Suspicious user didn't pass captcha verification")]
     SuspiciousUser,
+    #[error("Not allowed named sub-account {0}")]
+    NotAllowedNamedSubAccount(near_sdk::AccountId),
     #[error("Captcha error: {0}")]
     CaptchaError(#[from] crate::captcha::CaptchaError),
 }
@@ -34,7 +36,11 @@ impl IntoResponse for AppError {
                 (StatusCode::UNAUTHORIZED, "User verification failure")
             }
             Self::CaptchaError(_) => (StatusCode::UNAUTHORIZED, "Captcha error"),
-            Self::SuspiciousUser => (StatusCode::UNAUTHORIZED, "Suspicous user"),
+            Self::SuspiciousUser => (StatusCode::UNAUTHORIZED, "Suspicious user"),
+            Self::NotAllowedNamedSubAccount(_) => (
+                StatusCode::UNAUTHORIZED,
+                "Allowed only implicit account id or named sub-account from .near root account",
+            ),
         };
         (status, Json(json!({ "error": err_msg }))).into_response()
     }

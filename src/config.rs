@@ -11,6 +11,8 @@ pub struct AppConfig {
     pub verification_provider: VerificationProviderConfig,
     pub signer: SignerConfig,
     pub captcha: CaptchaConfig,
+    #[serde(default = "default_allow_named_sub_accounts")]
+    pub allow_named_sub_accounts: bool,
 }
 
 pub fn load_config() -> Result<AppConfig, ConfigError> {
@@ -21,4 +23,8 @@ pub fn load_config() -> Result<AppConfig, ConfigError> {
         .add_source(config::File::with_name("config/local").required(false))
         .build()
         .and_then(|config| config.try_deserialize())
+}
+
+fn default_allow_named_sub_accounts() -> bool {
+    true
 }

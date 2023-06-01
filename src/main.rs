@@ -18,7 +18,7 @@ use tower_http::cors::CorsLayer;
 use uuid::Uuid;
 
 use crate::config::AppConfig;
-use utils::{enable_logging, set_heavy_panic};
+use utils::{enable_logging, is_allowed_named_sub_account, set_heavy_panic};
 use verification_provider::{FractalClient, KycStatus, VerifiedUser};
 
 #[tokio::main]
@@ -141,6 +141,10 @@ pub async fn verify(
 ) -> Result<Json<SignedResponse>, AppError> {
     tracing::debug!("Req: {:?}", req);
 
+    if !state.config.allow_named_sub_accounts && !is_allowed_named_sub_account(&req.claimer) {
+        return Err(AppError::NotAllowedNamedSubAccount(req.claimer));
+    }
+
     match state.captcha.verify(&req.captcha).await {
         Ok(true) => (),
         Ok(false) => return Err(AppError::SuspiciousUser),
@@ -220,6 +224,7 @@ mod tests {
             listen_address: "0.0.0.0:8080".to_owned(),
             verification_provider: Default::default(),
             captcha: Default::default(),
+            allow_named_sub_accounts: true,
         };
 
         let claimer = AccountId::new_unchecked("test.near".to_owned());
@@ -263,6 +268,7 @@ mod tests {
             listen_address: "0.0.0.0:8080".to_owned(),
             verification_provider: Default::default(),
             captcha: Default::default(),
+            allow_named_sub_accounts: true,
         };
 
         let claimer = AccountId::new_unchecked("test.near".to_owned());
