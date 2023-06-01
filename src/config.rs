@@ -26,5 +26,5 @@ pub fn load_config() -> Result<AppConfig, ConfigError> {
 }
 
 fn default_allow_named_sub_accounts() -> bool {
-    true
+    false
 }
