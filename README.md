@@ -35,10 +35,10 @@ Provider could be configured with JSON configuration below:
 
 ```
     "verificationProvider": {
-        "requestTokenUrl": "https://{{PUT_PUT_AUTH_FRACTAL_HOST_HERE}}/oauth/token",
-        "requestUserUrl": "https://{{PUT_PUT_RESOURCE_FRACTAL_HOST_HERE}}/users/me",
-        "clientId": "{{PUT_FRACTAL_CLIENT_ID_HERE}}",
-        "clientSecret": "{{PUT_FRACTAL_CLIENT_SECRET_HERE}}"
+      "requestTokenUrl": "https://{{PUT_PUT_AUTH_FRACTAL_HOST_HERE}}/oauth/token",
+      "requestUserUrl": "https://{{PUT_PUT_RESOURCE_FRACTAL_HOST_HERE}}/users/me",
+      "clientId": "{{PUT_FRACTAL_CLIENT_ID_HERE}}",
+      "clientSecret": "{{PUT_FRACTAL_CLIENT_SECRET_HERE}}"
     }
 ```
 
@@ -49,19 +49,43 @@ Configuration keys explanation:
 *   `clientId` - Client id from API info acquired after create of integration at `Fractal.id` client dashboard. See more <https://docs.developer.fractal.id/client-dashboard>
 *   `clientSecret` - Client secret from API info acquired after create of integration at `Fractal.id` client dashboard. See more <https://docs.developer.fractal.id/client-dashboard>
 
+
+### Google re-CAPTCHA configuration
+
+We use re-CAPTCHA Enterprise to verify that request came from a human
+
+Captcha client could be configured with JSON configuration below:
+
+```
+    "captcha": {
+      "action": "homepage",
+      "threshold": 0.5,
+      "secret": "{{PUT_GOOGLE_CAPTCHA_SECRET_HERE}}
+    }
+```
+
+Configuration keys explanation:
+
+*   `action` - The page alias we want to verify captcha at, requests with `action` different from configured value will be denied
+*   `threshold` - Google user's score threshold minimum to accept requests from. Score below this value will mean that user is most-likely a bot
+*   `secret` - Secret required by Google to verify captcha for third-party clients
+
 ## Docker
 
 Sample of `*-secrets.json` configuration file:
 ```
 {
     "verificationProvider": {
-        "clientId": "{{SOME_CLIENT_ID_VALUE_HERE}}",
-        "clientSecret": "{{SOME_CLIENT_SECRET_VALUE_HERE}}"
+      "clientId": "{{SOME_CLIENT_ID_VALUE_HERE}}",
+      "clientSecret": "{{SOME_CLIENT_SECRET_VALUE_HERE}}"
     },
     "signer": {
-        "credentials": {
-            "signingKey": "{{SOME_ED25519_BASE64_ENCODED_PRIVATE_KEY_HERE}}"
-        }
+      "credentials": {
+        "signingKey": "{{SOME_ED25519_BASE64_ENCODED_PRIVATE_KEY_HERE}}"
+      }
+    },
+    "captcha": {
+      "secret": "{{PUT_GOOGLE_CAPTCHA_SECRET_HERE}}
     }
 }
 ```
