@@ -2,10 +2,8 @@ name: Rust
 
 on:
   pull_request:
-    branches: [master, main]
   merge_group:
   push:
-    branches: [master, main]
 
 concurrency:
   group: ci-${{ github.ref }}-${{ github.workflow }}
@@ -15,22 +13,33 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  test:
+  fmt:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v3
+      - run: cargo fmt --all --check
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            target
+          key: cargo-cache-${{ hashFiles('Cargo.*') }}
       - uses: technote-space/get-diff-action@v6.1.2
         with:
           PATTERNS: |
             **/**.rs
             contracts/Cargo.lock
-      - name: Build
-        if: env.GIT_DIFF
-        run: cargo build --verbose
       - name: Clippy
         if: env.GIT_DIFF
-        run: cargo clippy
+        run: cargo clippy --release
+      - name: Build
+        if: env.GIT_DIFF
+        run: cargo build --release
       - name: Run tests
         if: env.GIT_DIFF
-        run: cargo test --verbose
+        run: cargo test --release
