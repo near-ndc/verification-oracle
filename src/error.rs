@@ -5,8 +5,10 @@ use near_sdk::serde_json::json;
 pub enum AppError {
     #[error("Signing error")]
     SigningError,
-    #[error("User uniqueness is not verified error")]
-    UserUniquenessNotVerified,
+    #[error("User face verification were rejected")]
+    FaceVerificationRejected,
+    #[error("User face verification is missed")]
+    FaceVerificationMissed,
     #[error("Http request timed out: {0}")]
     TimeoutError(String),
     #[error("Http request failed: {0}")]
@@ -29,9 +31,13 @@ impl IntoResponse for AppError {
             Self::SigningError | Self::ParseError(_) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error")
             }
-            Self::UserUniquenessNotVerified => {
-                (StatusCode::UNAUTHORIZED, "User didn't pass verification")
+            Self::FaceVerificationRejected => {
+                (StatusCode::UNAUTHORIZED, "Face verification were rejected")
             }
+            Self::FaceVerificationMissed => (
+                StatusCode::UNAUTHORIZED,
+                "Face verification weren't completed",
+            ),
             Self::ReqwestError(_) | Self::Generic(_) | Self::TimeoutError(_) => {
                 (StatusCode::UNAUTHORIZED, "User verification failure")
             }

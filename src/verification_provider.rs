@@ -35,7 +35,7 @@ pub enum FractalTokenKind {
     },
 }
 
-#[derive(Deserialize, Debug, PartialEq)]
+#[derive(Deserialize, Debug, PartialEq, Clone)]
 #[serde(crate = "near_sdk::serde", remote = "Self")]
 pub struct OAuthToken {
     pub access_token: String,
@@ -62,7 +62,7 @@ pub struct TokenLifetime {
 
 #[derive(Deserialize, Debug)]
 #[serde(crate = "near_sdk::serde")]
-pub struct User {
+pub struct RawFractalUser {
     #[serde(deserialize_with = "utils::de_external_account_id_from_uuid")]
     pub uid: ExternalAccountId,
     pub emails: Vec<Email>,
@@ -99,7 +99,7 @@ pub struct VerificationCase {
     pub updated_at: DateTime<Utc>,
     #[serde(deserialize_with = "utils::de_strings_joined_by_plus")]
     pub level: Vec<VerificationLevel>,
-    pub status: VerificationStatus,
+    pub status: CaseStatus,
     pub credential: CredentialStatus,
     pub details: VerificationDetails,
 }
@@ -121,7 +121,7 @@ pub enum VerificationLevel {
 
 #[derive(Deserialize, Debug)]
 #[serde(crate = "near_sdk::serde", rename_all = "lowercase")]
-pub enum VerificationStatus {
+pub enum CaseStatus {
     Pending,
     Contacted,
     Done,
@@ -149,7 +149,7 @@ pub struct FractalClient {
 
 #[derive(Debug, PartialEq, Copy, Clone, Serialize)]
 #[serde(crate = "near_sdk::serde", rename_all = "lowercase")]
-pub enum KycStatus {
+pub enum VerificationStatus {
     Unavailable,
     Pending,
     Approved,
@@ -157,9 +157,11 @@ pub enum KycStatus {
 }
 
 #[derive(Debug, Clone)]
-pub struct VerifiedUser {
+pub struct FractalUser {
     pub user_id: ExternalAccountId,
-    pub kyc_status: KycStatus,
+    pub token: OAuthToken,
+    pub fv_status: VerificationStatus,
+    pub kyc_status: VerificationStatus,
 }
 
 impl FractalClient {
@@ -172,16 +174,41 @@ impl FractalClient {
         })
     }
 
-    pub async fn verify(&self, fractal_token: FractalTokenKind) -> Result<VerifiedUser, AppError> {
-        let fetched = self.fetch_user(fractal_token).await;
-        tracing::trace!("Fetched user {fetched:?}");
+    pub async fn fetch_user(
+        &self,
+        fractal_token: FractalTokenKind,
+    ) -> Result<FractalUser, AppError> {
+        let oauth_token = match fractal_token {
+            FractalTokenKind::AuthorizationCode {
+                code, redirect_uri, ..
+            } => self.acquire_oauth_token(&code, &redirect_uri).await?,
+            // TODO: check if access_token not expired and refresh if needed
+            FractalTokenKind::OAuth { token, .. } => token,
+        };
+        tracing::trace!("OAuthToken: {oauth_token:?}");
 
-        match fetched {
-            Ok(mut user) if user.is_verified_uniqueness() => Ok(VerifiedUser {
-                kyc_status: user.get_kyc_status(),
-                user_id: user.uid,
-            }),
-            Ok(_) => Err(AppError::UserUniquenessNotVerified),
+        let fetched_res = self
+            .inner_client
+            .get(&self.config.request_user_url)
+            .bearer_auth(&oauth_token.access_token)
+            .send()
+            .await?
+            .json::<RawFractalUser>()
+            .await
+            .map_err(AppError::from);
+
+        match fetched_res {
+            Ok(mut user) => {
+                tracing::debug!("Fetched raw user: {user:?}");
+
+                Ok(FractalUser {
+                    fv_status: user.get_status(&[VerificationLevel::Uniqueness]),
+                    kyc_status: user
+                        .get_status(&[VerificationLevel::Basic, VerificationLevel::Liveness]),
+                    user_id: user.uid,
+                    token: oauth_token,
+                })
+            }
             Err(e) => {
                 tracing::error!("Unable to fetch user. Error: {:?}", e);
                 Err(e)
@@ -217,44 +244,10 @@ impl FractalClient {
             Err(_) => Err(format!("Failed to parse token response {:?}", data).into()),
         }
     }
-
-    async fn fetch_user(&self, token: FractalTokenKind) -> Result<User, AppError> {
-        let user_token = match token {
-            FractalTokenKind::AuthorizationCode {
-                code, redirect_uri, ..
-            } => self.acquire_oauth_token(&code, &redirect_uri).await?,
-            // TODO: check if access_token not expired and refresh if needed
-            FractalTokenKind::OAuth { token, .. } => token,
-        };
-
-        self.inner_client
-            .get(&self.config.request_user_url)
-            .bearer_auth(user_token.access_token)
-            .send()
-            .await?
-            .json::<User>()
-            .await
-            .map_err(AppError::from)
-    }
 }
 
-impl User {
-    fn is_verified_uniqueness(&self) -> bool {
-        self.verification_cases.iter().any(|case| {
-            matches!(case,
-                VerificationCase {
-                    level,
-                    status: VerificationStatus::Done,
-                    credential: CredentialStatus::Approved,
-                    ..
-                } if level
-                    .iter()
-                    .any(|level| level == &VerificationLevel::Uniqueness)
-            )
-        })
-    }
-
-    fn get_kyc_status(&mut self) -> KycStatus {
+impl RawFractalUser {
+    fn get_status(&mut self, levels: &[VerificationLevel]) -> VerificationStatus {
         // Sort by updated_at timestamp, most recent first
         self.verification_cases
             .sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
@@ -263,17 +256,11 @@ impl User {
             .verification_cases
             .iter()
             .filter_map(|case| {
-                // Ignore other than `basic+liveness` verification cases
-                if !(case
-                    .level
-                    .iter()
-                    .any(|level| level == &VerificationLevel::Basic)
-                    && case
-                        .level
-                        .iter()
-                        .any(|level| level == &VerificationLevel::Liveness))
-                {
-                    return None;
+                // Ignore cases other than related to requested levels
+                for level in levels {
+                    if !case.level.iter().any(|l| l == level) {
+                        return None;
+                    }
                 }
 
                 match case {
@@ -281,17 +268,17 @@ impl User {
                         credential: CredentialStatus::Approved,
                         details: VerificationDetails { liveness: true },
                         ..
-                    } => Some(KycStatus::Approved),
+                    } => Some(VerificationStatus::Approved),
                     VerificationCase {
                         credential: CredentialStatus::Pending,
                         details: VerificationDetails { liveness: true },
                         ..
-                    } => Some(KycStatus::Pending),
+                    } => Some(VerificationStatus::Pending),
                     VerificationCase {
                         credential: CredentialStatus::Rejected,
                         details: VerificationDetails { liveness: true },
                         ..
-                    } => Some(KycStatus::Rejected),
+                    } => Some(VerificationStatus::Rejected),
                     // Ignore verification cases without `liveness: true`
                     _ => None,
                 }
@@ -301,13 +288,15 @@ impl User {
         // If user has any approved case
         if cases_status
             .iter()
-            .any(|status| status == &KycStatus::Approved)
+            .any(|status| status == &VerificationStatus::Approved)
         {
-            return KycStatus::Approved;
+            return VerificationStatus::Approved;
         }
 
         // Otherwise, check the most recent result
-        *cases_status.first().unwrap_or(&KycStatus::Unavailable)
+        *cases_status
+            .first()
+            .unwrap_or(&VerificationStatus::Unavailable)
     }
 }
 
@@ -447,8 +436,8 @@ mod tests {
     fn test_user_verify_uniqueness() {
         struct TestCase {
             name: &'static str,
-            input: User,
-            expected: bool,
+            input: RawFractalUser,
+            expected: VerificationStatus,
         }
 
         let test_cases = [
@@ -460,39 +449,39 @@ mod tests {
                         Utc::now(),
                         Utc::now(),
                         VerificationLevelState::Uniqueness(
-                            VerificationStatus::Done,
+                            CaseStatus::Done,
                             CredentialStatus::Approved,
                         ),
-                        false,
+                        true,
                     ),
                 ]),
-                expected: true,
+                expected: VerificationStatus::Approved,
             },
             TestCase {
                 name: "Verify uniqueness success (multiple cases)",
                 input: gen_user(vec![
                     // not finished case
                     gen_verification_case(
-                        Utc::now(),
-                        Utc::now(),
+                        Utc::now() - Duration::days(2),
+                        Utc::now() - Duration::days(1),
                         VerificationLevelState::Uniqueness(
-                            VerificationStatus::Contacted,
+                            CaseStatus::Contacted,
                             CredentialStatus::Pending,
                         ),
-                        false,
+                        true,
                     ),
                     // finished & approved case
                     gen_verification_case(
-                        Utc::now(),
+                        Utc::now() - Duration::days(3),
                         Utc::now(),
                         VerificationLevelState::Uniqueness(
-                            VerificationStatus::Done,
+                            CaseStatus::Done,
                             CredentialStatus::Approved,
                         ),
-                        false,
+                        true,
                     ),
                 ]),
-                expected: true,
+                expected: VerificationStatus::Approved,
             },
             TestCase {
                 name: "Verify uniqueness failure (single case)",
@@ -502,52 +491,73 @@ mod tests {
                         Utc::now(),
                         Utc::now(),
                         VerificationLevelState::Uniqueness(
-                            VerificationStatus::Done,
+                            CaseStatus::Done,
                             CredentialStatus::Rejected,
                         ),
-                        false,
+                        true,
                     ),
                 ]),
-                expected: false,
+                expected: VerificationStatus::Rejected,
             },
             TestCase {
                 name: "Verify uniqueness failure (multiple cases)",
                 input: gen_user(vec![
+                    // finished & rejected case
+                    gen_verification_case(
+                        Utc::now() - Duration::days(2),
+                        Utc::now() - Duration::days(1),
+                        VerificationLevelState::Uniqueness(
+                            CaseStatus::Done,
+                            CredentialStatus::Rejected,
+                        ),
+                        true,
+                    ),
                     // not finished case
                     gen_verification_case(
-                        Utc::now(),
+                        Utc::now() - Duration::days(3),
                         Utc::now(),
                         VerificationLevelState::Uniqueness(
-                            VerificationStatus::Pending,
+                            CaseStatus::Pending,
                             CredentialStatus::Pending,
                         ),
-                        false,
+                        true,
                     ),
-                    // finished & approved case
+                ]),
+                expected: VerificationStatus::Pending,
+            },
+            TestCase {
+                name: "Verify uniqueness failure (w/o liveness)",
+                input: gen_user(vec![
+                    // finished without liveness
                     gen_verification_case(
                         Utc::now(),
                         Utc::now(),
                         VerificationLevelState::Uniqueness(
-                            VerificationStatus::Done,
-                            CredentialStatus::Rejected,
+                            CaseStatus::Done,
+                            CredentialStatus::Approved,
                         ),
                         false,
                     ),
                 ]),
-                expected: false,
+                expected: VerificationStatus::Unavailable,
+            },
+            TestCase {
+                name: "Verify uniqueness failure (no cases)",
+                input: gen_user(vec![]),
+                expected: VerificationStatus::Unavailable,
             },
         ];
 
         for TestCase {
             name,
-            input,
+            mut input,
             expected,
         } in test_cases
         {
-            let result = input.is_verified_uniqueness();
+            let result = input.get_status(&[VerificationLevel::Uniqueness]);
             assert_eq!(
                 result, expected,
-                "Test case `{name}` failed with result {result}. Expected {expected}"
+                "Test case `{name}` failed with result {result:?}. Expected {expected:?}"
             );
         }
     }
@@ -556,8 +566,8 @@ mod tests {
     fn test_user_get_kyc_status() {
         struct TestCase {
             name: &'static str,
-            input: User,
-            expected: KycStatus,
+            input: RawFractalUser,
+            expected: VerificationStatus,
         }
 
         let test_cases = [
@@ -568,40 +578,31 @@ mod tests {
                     gen_verification_case(
                         Utc::now(),
                         Utc::now(),
-                        VerificationLevelState::KYC(
-                            VerificationStatus::Done,
-                            CredentialStatus::Approved,
-                        ),
+                        VerificationLevelState::KYC(CaseStatus::Done, CredentialStatus::Approved),
                         true,
                     ),
                 ]),
-                expected: KycStatus::Approved,
+                expected: VerificationStatus::Approved,
             },
             TestCase {
                 name: "Verify KYC approved (multiple cases, recently approved)",
                 input: gen_user(vec![
                     // rejected case
                     gen_verification_case(
+                        Utc::now() - Duration::days(2),
                         Utc::now() - Duration::days(1),
-                        Utc::now() - Duration::days(1),
-                        VerificationLevelState::KYC(
-                            VerificationStatus::Done,
-                            CredentialStatus::Rejected,
-                        ),
+                        VerificationLevelState::KYC(CaseStatus::Done, CredentialStatus::Rejected),
                         true,
                     ),
                     // approved case
                     gen_verification_case(
+                        Utc::now() - Duration::days(3),
                         Utc::now(),
-                        Utc::now(),
-                        VerificationLevelState::KYC(
-                            VerificationStatus::Done,
-                            CredentialStatus::Approved,
-                        ),
+                        VerificationLevelState::KYC(CaseStatus::Done, CredentialStatus::Approved),
                         true,
                     ),
                 ]),
-                expected: KycStatus::Approved,
+                expected: VerificationStatus::Approved,
             },
             TestCase {
                 name: "Verify KYC pending (single case)",
@@ -610,61 +611,52 @@ mod tests {
                     gen_verification_case(
                         Utc::now(),
                         Utc::now(),
-                        VerificationLevelState::KYC(
-                            VerificationStatus::Pending,
-                            CredentialStatus::Pending,
-                        ),
+                        VerificationLevelState::KYC(CaseStatus::Pending, CredentialStatus::Pending),
                         true,
                     ),
                 ]),
-                expected: KycStatus::Pending,
+                expected: VerificationStatus::Pending,
             },
             TestCase {
                 name: "Verify KYC pending (multiple cases, previously rejected)",
                 input: gen_user(vec![
                     // rejected case
                     gen_verification_case(
+                        Utc::now() - Duration::days(2),
                         Utc::now() - Duration::days(1),
-                        Utc::now() - Duration::days(1),
-                        VerificationLevelState::KYC(
-                            VerificationStatus::Done,
-                            CredentialStatus::Rejected,
-                        ),
+                        VerificationLevelState::KYC(CaseStatus::Done, CredentialStatus::Rejected),
                         true,
                     ),
                     // pending case
                     gen_verification_case(
-                        Utc::now(),
+                        Utc::now() - Duration::days(3),
                         Utc::now(),
                         VerificationLevelState::KYC(
-                            VerificationStatus::Contacted,
+                            CaseStatus::Contacted,
                             CredentialStatus::Pending,
                         ),
                         true,
                     ),
                 ]),
-                expected: KycStatus::Pending,
+                expected: VerificationStatus::Pending,
             },
             TestCase {
                 name: "Verify KYC unavailable (no cases)",
                 input: gen_user(vec![]),
-                expected: KycStatus::Unavailable,
+                expected: VerificationStatus::Unavailable,
             },
             TestCase {
-                name: "Verify KYC unavailable (liveness failure)",
+                name: "Verify KYC unavailable (w/o liveness)",
                 input: gen_user(vec![
                     // approved case without liveness
                     gen_verification_case(
                         Utc::now(),
                         Utc::now(),
-                        VerificationLevelState::KYC(
-                            VerificationStatus::Done,
-                            CredentialStatus::Approved,
-                        ),
+                        VerificationLevelState::KYC(CaseStatus::Done, CredentialStatus::Approved),
                         false,
                     ),
                 ]),
-                expected: KycStatus::Unavailable,
+                expected: VerificationStatus::Unavailable,
             },
             TestCase {
                 name: "Verify KYC rejected (single case)",
@@ -673,40 +665,31 @@ mod tests {
                     gen_verification_case(
                         Utc::now(),
                         Utc::now(),
-                        VerificationLevelState::KYC(
-                            VerificationStatus::Done,
-                            CredentialStatus::Rejected,
-                        ),
+                        VerificationLevelState::KYC(CaseStatus::Done, CredentialStatus::Rejected),
                         true,
                     ),
                 ]),
-                expected: KycStatus::Rejected,
+                expected: VerificationStatus::Rejected,
             },
             TestCase {
                 name: "Verify KYC rejected (multiple cases)",
                 input: gen_user(vec![
                     // rejected case
                     gen_verification_case(
+                        Utc::now() - Duration::days(2),
                         Utc::now() - Duration::days(1),
-                        Utc::now() - Duration::days(1),
-                        VerificationLevelState::KYC(
-                            VerificationStatus::Done,
-                            CredentialStatus::Rejected,
-                        ),
+                        VerificationLevelState::KYC(CaseStatus::Done, CredentialStatus::Rejected),
                         true,
                     ),
                     // pending case
                     gen_verification_case(
+                        Utc::now() - Duration::days(3),
                         Utc::now(),
-                        Utc::now(),
-                        VerificationLevelState::KYC(
-                            VerificationStatus::Done,
-                            CredentialStatus::Rejected,
-                        ),
+                        VerificationLevelState::KYC(CaseStatus::Done, CredentialStatus::Rejected),
                         true,
                     ),
                 ]),
-                expected: KycStatus::Rejected,
+                expected: VerificationStatus::Rejected,
             },
         ];
 
@@ -716,7 +699,7 @@ mod tests {
             expected,
         } in test_cases
         {
-            let result = input.get_kyc_status();
+            let result = input.get_status(&[VerificationLevel::Basic, VerificationLevel::Liveness]);
             assert_eq!(
                 result, expected,
                 "Test case `{name}` failed with result {result:?}. Expected {expected:?}"
@@ -788,9 +771,9 @@ mod tests {
             "wallets": []
         }"#;
 
-        let parsed = serde_json::from_str::<User>(user_json);
+        let parsed = serde_json::from_str::<RawFractalUser>(user_json);
 
-        assert_matches!(parsed.as_ref(), Ok(User {
+        assert_matches!(parsed.as_ref(), Ok(RawFractalUser {
             uid,
             ..
         }) if uid.as_ref() == "de223722fe2111edbe560242ac120002");
@@ -799,7 +782,7 @@ mod tests {
             VerificationCase {
                 id: id0,
                 credential: CredentialStatus::Approved,
-                status: VerificationStatus::Done,
+                status: CaseStatus::Done,
                 level: levels0,
                 created_at: created_at0,
                 updated_at: updated_at0,
@@ -808,7 +791,7 @@ mod tests {
             VerificationCase {
                 id: id1,
                 credential: CredentialStatus::Approved,
-                status: VerificationStatus::Done,
+                status: CaseStatus::Done,
                 level: levels1,
                 ..
             },
@@ -818,8 +801,8 @@ mod tests {
     }
 
     enum VerificationLevelState {
-        Uniqueness(VerificationStatus, CredentialStatus),
-        KYC(VerificationStatus, CredentialStatus),
+        Uniqueness(CaseStatus, CredentialStatus),
+        KYC(CaseStatus, CredentialStatus),
     }
 
     fn gen_verification_case(
@@ -850,8 +833,8 @@ mod tests {
         }
     }
 
-    fn gen_user(verification_cases: Vec<VerificationCase>) -> User {
-        User {
+    fn gen_user(verification_cases: Vec<VerificationCase>) -> RawFractalUser {
+        RawFractalUser {
             uid: ExternalAccountId::from(uuid::Uuid::new_v4()),
             emails: vec![],
             phones: vec![],

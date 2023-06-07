@@ -19,7 +19,9 @@ use uuid::Uuid;
 
 use crate::config::AppConfig;
 use utils::{enable_logging, is_allowed_named_sub_account, set_heavy_panic};
-use verification_provider::{FractalClient, FractalTokenKind, KycStatus, VerifiedUser};
+use verification_provider::{
+    FractalClient, FractalTokenKind, FractalUser, OAuthToken, VerificationStatus,
+};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -124,21 +126,36 @@ impl From<Uuid> for ExternalAccountId {
 }
 
 #[derive(Serialize, Debug)]
+#[serde(crate = "near_sdk::serde", untagged)]
+pub enum VerificationResponse {
+    Approved(ApprovedResponse),
+    Pending(PendingResponse),
+}
+
+/// Signed response for a fractal user with approved face verification
+#[derive(Serialize, Debug)]
 #[serde(crate = "near_sdk::serde")]
-pub struct SignedResponse {
+pub struct ApprovedResponse {
     #[serde(rename = "m")]
     pub message: String,
     #[serde(rename = "sig")]
     pub signature_ed25519: String,
     #[serde(rename = "kyc")]
-    pub kyc_status: KycStatus,
+    pub kyc_status: VerificationStatus,
+}
+
+/// Response for a fractal user whos face verification is pending for final decision
+#[derive(Serialize, Debug, PartialEq)]
+#[serde(crate = "near_sdk::serde")]
+pub struct PendingResponse {
+    pub token: OAuthToken,
 }
 
 pub async fn verify(
     State(state): State<AppState>,
     Json(req): Json<VerificationReq>,
-) -> Result<Json<SignedResponse>, AppError> {
-    tracing::debug!("Req: {:?}", req);
+) -> Result<Json<VerificationResponse>, AppError> {
+    tracing::debug!("Request: {req:?}");
 
     if !state.config.allow_named_sub_accounts && !is_allowed_named_sub_account(&req.claimer) {
         return Err(AppError::NotAllowedNamedSubAccount(req.claimer));
@@ -150,7 +167,7 @@ pub async fn verify(
             Ok(false) => return Err(AppError::SuspiciousUser),
             Err(e) => {
                 tracing::error!(
-                    "Captcha verification failure for account `{:?}`. Error: {e:?}",
+                    "Captcha verification failure for an account `{:?}`. Error: {e:?}",
                     req.claimer
                 );
                 return Err(AppError::from(e));
@@ -158,23 +175,34 @@ pub async fn verify(
         };
     }
 
-    let verified_user = state.client.verify(req.fractal_token).await?;
+    let user = state.client.fetch_user(req.fractal_token).await?;
 
-    create_verified_account_response(&state.config, req.claimer, verified_user)
+    let res = match user.fv_status {
+        VerificationStatus::Approved => create_approved_response(&state.config, req.claimer, user),
+        VerificationStatus::Pending => Ok(VerificationResponse::Pending(PendingResponse {
+            token: user.token,
+        })),
+        VerificationStatus::Rejected => Err(AppError::FaceVerificationRejected),
+        VerificationStatus::Unavailable => Err(AppError::FaceVerificationMissed),
+    };
+
+    tracing::debug!("Response: {res:?}");
+
+    res.map(Json)
 }
 
-/// Creates signed json response with verified account
-fn create_verified_account_response(
+/// Creates signed json response for fractal user with approved face verification
+fn create_approved_response(
     config: &AppConfig,
     claimer: AccountId,
-    verified_user: VerifiedUser,
-) -> Result<Json<SignedResponse>, AppError> {
+    user: FractalUser,
+) -> Result<VerificationResponse, AppError> {
     let credentials = &config.signer.credentials;
     let raw_message = VerifiedAccountToken {
         claimer,
-        ext_account: verified_user.user_id.clone(),
+        ext_account: user.user_id,
         timestamp: Utc::now().timestamp() as u64,
-        verified_kyc: verified_user.kyc_status == KycStatus::Approved,
+        verified_kyc: user.kyc_status == VerificationStatus::Approved,
     }
     .try_to_vec()
     .map_err(|_| AppError::SigningError)?;
@@ -192,20 +220,17 @@ fn create_verified_account_response(
     let message = general_purpose::STANDARD.encode(&raw_message);
     let signature_ed25519 = general_purpose::STANDARD.encode(raw_signature_ed25519);
 
-    tracing::debug!("Verification passed for {verified_user:?}");
-
-    Ok(Json(SignedResponse {
+    Ok(VerificationResponse::Approved(ApprovedResponse {
         message,
         signature_ed25519,
-        kyc_status: verified_user.kyc_status,
+        kyc_status: user.kyc_status,
     }))
 }
 
 #[cfg(test)]
 mod tests {
     use crate::signer::{SignerConfig, SignerCredentials};
-    use crate::verification_provider::{KycStatus, VerifiedUser};
-    use crate::{create_verified_account_response, AppConfig, VerifiedAccountToken};
+    use crate::*;
     use assert_matches::assert_matches;
     use base64::{engine::general_purpose, Engine};
     use chrono::Utc;
@@ -216,34 +241,36 @@ mod tests {
     use uuid::Uuid;
 
     #[test]
-    fn test_create_verified_account_response_no_kyc() {
-        let signing_key = near_crypto::SecretKey::from_random(near_crypto::KeyType::ED25519);
-        let config = AppConfig {
-            signer: SignerConfig {
-                credentials: SignerCredentials { signing_key },
-            },
-            listen_address: "0.0.0.0:8080".to_owned(),
-            verification_provider: Default::default(),
-            captcha: Default::default(),
-            allow_named_sub_accounts: true,
-        };
+    fn test_approved_account_response_no_kyc() {
+        let config = gen_app_config(false);
 
         let claimer = AccountId::new_unchecked("test.near".to_owned());
-        let verified_user = VerifiedUser {
+        let verified_user = FractalUser {
             user_id: Uuid::default().into(),
-            kyc_status: KycStatus::Unavailable,
+            token: OAuthToken {
+                access_token: "some_auth_token".to_owned(),
+                refresh_token: "some_refresh_token".to_owned(),
+                expires_at: Utc::now(),
+            },
+            fv_status: VerificationStatus::Approved,
+            kyc_status: VerificationStatus::Unavailable,
         };
-        let res = create_verified_account_response(&config, claimer.clone(), verified_user.clone())
-            .unwrap();
+        let approved_res =
+            match create_approved_response(&config, claimer.clone(), verified_user.clone()) {
+                Ok(VerificationResponse::Approved(res)) => res,
+                _ => panic!("Not an approved verification"),
+            };
 
         let credentials = &config.signer.credentials;
 
-        let decoded_bytes = general_purpose::STANDARD.decode(&res.message).unwrap();
+        let decoded_bytes = general_purpose::STANDARD
+            .decode(&approved_res.message)
+            .unwrap();
 
         assert!(Signature::from_parts(
             KeyType::ED25519,
             &general_purpose::STANDARD
-                .decode(&res.signature_ed25519)
+                .decode(&approved_res.signature_ed25519)
                 .unwrap()
         )
         .unwrap()
@@ -260,34 +287,37 @@ mod tests {
     }
 
     #[test]
-    fn test_create_verified_account_response_with_kyc() {
-        let signing_key = near_crypto::SecretKey::from_random(near_crypto::KeyType::ED25519);
-        let config = AppConfig {
-            signer: SignerConfig {
-                credentials: SignerCredentials { signing_key },
-            },
-            listen_address: "0.0.0.0:8080".to_owned(),
-            verification_provider: Default::default(),
-            captcha: Default::default(),
-            allow_named_sub_accounts: true,
-        };
+    fn test_approved_account_response_with_kyc() {
+        let config = gen_app_config(false);
 
         let claimer = AccountId::new_unchecked("test.near".to_owned());
-        let verified_user = VerifiedUser {
+        let verified_user = FractalUser {
             user_id: Uuid::default().into(),
-            kyc_status: KycStatus::Approved,
+            token: OAuthToken {
+                access_token: "some_auth_token".to_owned(),
+                refresh_token: "some_refresh_token".to_owned(),
+                expires_at: Utc::now(),
+            },
+            fv_status: VerificationStatus::Approved,
+            kyc_status: VerificationStatus::Approved,
         };
-        let res = create_verified_account_response(&config, claimer.clone(), verified_user.clone())
-            .unwrap();
+
+        let approved_res =
+            match create_approved_response(&config, claimer.clone(), verified_user.clone()) {
+                Ok(VerificationResponse::Approved(res)) => res,
+                _ => panic!("Not an approved verification"),
+            };
 
         let credentials = &config.signer.credentials;
 
-        let decoded_bytes = general_purpose::STANDARD.decode(&res.message).unwrap();
+        let decoded_bytes = general_purpose::STANDARD
+            .decode(&approved_res.message)
+            .unwrap();
 
         assert!(Signature::from_parts(
             KeyType::ED25519,
             &general_purpose::STANDARD
-                .decode(&res.signature_ed25519)
+                .decode(&approved_res.signature_ed25519)
                 .unwrap()
         )
         .unwrap()
@@ -323,5 +353,19 @@ mod tests {
                 .0,
             "f20181bafc0c11edbe560242ac120002"
         );
+    }
+
+    fn gen_app_config(allow_named_sub_accounts: bool) -> AppConfig {
+        let signing_key = near_crypto::SecretKey::from_random(near_crypto::KeyType::ED25519);
+
+        AppConfig {
+            signer: SignerConfig {
+                credentials: SignerCredentials { signing_key },
+            },
+            listen_address: "0.0.0.0:8080".to_owned(),
+            verification_provider: Default::default(),
+            captcha: Default::default(),
+            allow_named_sub_accounts,
+        }
     }
 }
