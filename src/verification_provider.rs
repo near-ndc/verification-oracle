@@ -1,7 +1,13 @@
-use crate::{utils, AppError, ExternalAccountId, VerificationReq};
-use chrono::{DateTime, Utc};
+use crate::{utils, AppError, ExternalAccountId};
+use base64::{engine::general_purpose, Engine};
+use chrono::{DateTime, TimeZone, Utc};
 use near_sdk::{
-    serde::{Deserialize, Serialize},
+    borsh::{self, BorshDeserialize, BorshSerialize},
+    serde::{
+        de::{self, Deserializer},
+        ser::{self, Serializer},
+        Deserialize, Serialize,
+    },
     serde_json,
 };
 use reqwest::Client;
@@ -15,11 +21,43 @@ pub struct VerificationProviderConfig {
     pub client_secret: String,
 }
 
-#[derive(Deserialize, Debug, Default, Clone)]
-#[serde(crate = "near_sdk::serde")]
-pub struct UserToken {
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[serde(crate = "near_sdk::serde", untagged)]
+pub enum FractalTokenKind {
+    AuthorizationCode {
+        code: String,
+        captcha: String,
+        redirect_uri: String,
+    },
+    OAuth {
+        token: OAuthToken,
+        redirect_uri: String,
+    },
+}
+
+#[derive(Deserialize, Debug, PartialEq)]
+#[serde(crate = "near_sdk::serde", remote = "Self")]
+pub struct OAuthToken {
     pub access_token: String,
+    pub refresh_token: String,
+    pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(crate = "near_sdk::serde")]
+pub struct RawFractalToken {
+    pub access_token: String,
+    pub refresh_token: String,
     pub token_type: String,
+    #[serde(flatten)]
+    pub lifetime: TokenLifetime,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(crate = "near_sdk::serde")]
+pub struct TokenLifetime {
+    pub expires_in: u64,
+    pub created_at: u64,
 }
 
 #[derive(Deserialize, Debug)]
@@ -134,8 +172,8 @@ impl FractalClient {
         })
     }
 
-    pub async fn verify(&self, req: &VerificationReq) -> Result<VerifiedUser, AppError> {
-        let fetched = self.fetch_user(&req.code, &req.redirect_uri).await;
+    pub async fn verify(&self, fractal_token: FractalTokenKind) -> Result<VerifiedUser, AppError> {
+        let fetched = self.fetch_user(fractal_token).await;
         tracing::trace!("Fetched user {fetched:?}");
 
         match fetched {
@@ -151,11 +189,15 @@ impl FractalClient {
         }
     }
 
-    async fn fetch_user(&self, auth_code: &str, redirect_uri: &str) -> Result<User, AppError> {
+    async fn acquire_oauth_token(
+        &self,
+        code: &str,
+        redirect_uri: &str,
+    ) -> Result<OAuthToken, AppError> {
         let params: [(&str, &str); 5] = [
             ("client_id", &self.config.client_id),
             ("client_secret", &self.config.client_secret),
-            ("code", auth_code),
+            ("code", code),
             ("grant_type", "authorization_code"),
             ("redirect_uri", redirect_uri),
         ];
@@ -169,22 +211,30 @@ impl FractalClient {
             .text()
             .await?;
 
-        match serde_json::from_str(&data) {
-            Ok(UserToken {
-                access_token,
-                token_type,
-            }) if token_type.as_str() == "Bearer" => self
-                .inner_client
-                .get(&self.config.request_user_url)
-                .bearer_auth(access_token)
-                .send()
-                .await?
-                .json::<User>()
-                .await
-                .map_err(AppError::from),
+        match serde_json::from_str::<RawFractalToken>(&data) {
+            Ok(token) if token.token_type.as_str() == "Bearer" => Ok(OAuthToken::from(token)),
             Ok(token) => Err(format!("Unsupported token type {:?}", token).into()),
             Err(_) => Err(format!("Failed to parse token response {:?}", data).into()),
         }
+    }
+
+    async fn fetch_user(&self, token: FractalTokenKind) -> Result<User, AppError> {
+        let user_token = match token {
+            FractalTokenKind::AuthorizationCode {
+                code, redirect_uri, ..
+            } => self.acquire_oauth_token(&code, &redirect_uri).await?,
+            // TODO: check if access_token not expired and refresh if needed
+            FractalTokenKind::OAuth { token, .. } => token,
+        };
+
+        self.inner_client
+            .get(&self.config.request_user_url)
+            .bearer_auth(user_token.access_token)
+            .send()
+            .await?
+            .json::<User>()
+            .await
+            .map_err(AppError::from)
     }
 }
 
@@ -261,15 +311,137 @@ impl User {
     }
 }
 
+impl<'de> Deserialize<'de> for OAuthToken {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let encoded: String = Deserialize::deserialize(deserializer)?;
+
+        let raw = general_purpose::STANDARD.decode(encoded).map_err(|e| {
+            de::Error::custom(format!(
+                "Failed to deserialize base64 encoded oauth token {e:?}"
+            ))
+        })?;
+
+        OAuthToken::try_from_slice(&raw).map_err(|e| {
+            de::Error::custom(format!(
+                "Failed to deserialize borsh serialized oauth token {e:?}"
+            ))
+        })
+    }
+}
+
+impl<'a> FractalTokenKind {
+    pub fn captcha(&'a self) -> Option<&'a str> {
+        match self {
+            Self::AuthorizationCode { captcha, .. } => Some(captcha),
+            Self::OAuth { .. } => None,
+        }
+    }
+}
+
+impl TokenLifetime {
+    pub fn expires_at(&self) -> DateTime<Utc> {
+        Utc.timestamp_nanos((self.created_at + self.expires_in) as i64 * 1_000_000_000)
+    }
+}
+
+impl From<RawFractalToken> for OAuthToken {
+    fn from(token: RawFractalToken) -> Self {
+        Self {
+            access_token: token.access_token,
+            refresh_token: token.refresh_token,
+            expires_at: token.lifetime.expires_at(),
+        }
+    }
+}
+
+impl Serialize for OAuthToken {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let raw = self
+            .try_to_vec()
+            .map_err(|e| ser::Error::custom(format!("Failed to serialize oauth token {e:?}")))?;
+        let encoded = general_purpose::STANDARD.encode(raw);
+
+        serializer.serialize_str(&encoded)
+    }
+}
+
+impl BorshDeserialize for OAuthToken {
+    fn deserialize(buf: &mut &[u8]) -> std::io::Result<Self> {
+        let access_token = BorshDeserialize::deserialize(buf)?;
+        let refresh_token = BorshDeserialize::deserialize(buf)?;
+        let ts = BorshDeserialize::deserialize(buf)?;
+
+        Ok(OAuthToken {
+            access_token,
+            refresh_token,
+            expires_at: Utc.timestamp_nanos(ts),
+        })
+    }
+}
+
+impl BorshSerialize for OAuthToken {
+    fn serialize<W: borsh::maybestd::io::Write>(
+        &self,
+        writer: &mut W,
+    ) -> borsh::maybestd::io::Result<()> {
+        let ts = self.expires_at.timestamp_nanos();
+        BorshSerialize::serialize(&self.access_token, writer)?;
+        BorshSerialize::serialize(&self.refresh_token, writer)?;
+        BorshSerialize::serialize(&ts, writer)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{
-        CredentialStatus, ExternalAccountId, KycStatus, User, VerificationCase,
-        VerificationDetails, VerificationLevel, VerificationStatus,
-    };
+    use super::*;
     use assert_matches::assert_matches;
-    use chrono::{DateTime, Duration, Utc};
+    use chrono::{DateTime, Duration, TimeZone, Utc};
     use near_sdk::serde_json;
+
+    #[test]
+    fn test_raw_user_token() {
+        let json = r#"{
+            "access_token": "7rgojfemuk-aq8RcA7xWxJQKv6Ux0VWJ1DQtU6178B8",
+            "token_type": "bearer",
+            "expires_in": 7200,
+            "refresh_token": "thPSSHGnk3NGU5vV4V_g-Qrs47RibO9KEEhfKYEgJOw",
+            "scope": "uid:read email:read",
+            "created_at": 1543585106
+        }"#;
+
+        let raw_token = serde_json::from_str::<RawFractalToken>(json).unwrap();
+        let oauth_token = OAuthToken::from(raw_token);
+
+        assert_eq!(
+            oauth_token,
+            OAuthToken {
+                access_token: "7rgojfemuk-aq8RcA7xWxJQKv6Ux0VWJ1DQtU6178B8".to_owned(),
+                refresh_token: "thPSSHGnk3NGU5vV4V_g-Qrs47RibO9KEEhfKYEgJOw".to_owned(),
+                expires_at: Utc.timestamp_nanos(1543592306000000000),
+            }
+        );
+    }
+
+    #[test]
+    fn test_oauth_token_serde() {
+        let token = FractalTokenKind::OAuth {
+            redirect_uri: "https://some_url".to_owned(),
+            token: OAuthToken {
+                access_token: "some_auth_token".to_owned(),
+                refresh_token: "some_refresh_token".to_owned(),
+                expires_at: Utc::now(),
+            },
+        };
+        let json = serde_json::to_string(&token).unwrap();
+        let deserialized = serde_json::from_str::<FractalTokenKind>(&json).unwrap();
+        assert_eq!(deserialized, token);
+    }
 
     #[test]
     fn test_user_verify_uniqueness() {

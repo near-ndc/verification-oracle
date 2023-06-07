@@ -19,7 +19,7 @@ use uuid::Uuid;
 
 use crate::config::AppConfig;
 use utils::{enable_logging, is_allowed_named_sub_account, set_heavy_panic};
-use verification_provider::{FractalClient, KycStatus, VerifiedUser};
+use verification_provider::{FractalClient, FractalTokenKind, KycStatus, VerifiedUser};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -87,10 +87,9 @@ impl AppState {
 #[derive(Deserialize, Debug)]
 #[serde(crate = "near_sdk::serde")]
 pub struct VerificationReq {
-    pub code: String,
     pub claimer: AccountId,
-    pub redirect_uri: String,
-    pub captcha: String,
+    #[serde(flatten)]
+    pub fractal_token: FractalTokenKind,
 }
 
 #[derive(BorshSerialize, BorshDeserialize, Debug)]
@@ -145,19 +144,21 @@ pub async fn verify(
         return Err(AppError::NotAllowedNamedSubAccount(req.claimer));
     }
 
-    match state.captcha.verify(&req.captcha).await {
-        Ok(true) => (),
-        Ok(false) => return Err(AppError::SuspiciousUser),
-        Err(e) => {
-            tracing::error!(
-                "Captcha verification failure for account `{:?}`. Error: {e:?}",
-                req.claimer
-            );
-            return Err(AppError::from(e));
-        }
-    };
+    if let Some(captcha_token) = req.fractal_token.captcha() {
+        match state.captcha.verify(captcha_token).await {
+            Ok(true) => (),
+            Ok(false) => return Err(AppError::SuspiciousUser),
+            Err(e) => {
+                tracing::error!(
+                    "Captcha verification failure for account `{:?}`. Error: {e:?}",
+                    req.claimer
+                );
+                return Err(AppError::from(e));
+            }
+        };
+    }
 
-    let verified_user = state.client.verify(&req).await?;
+    let verified_user = state.client.verify(req.fractal_token).await?;
 
     create_verified_account_response(&state.config, req.claimer, verified_user)
 }

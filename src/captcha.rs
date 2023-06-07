@@ -84,7 +84,7 @@ impl CaptchaClient {
         })
     }
 
-    async fn fetch_captcha(&self, token: &String) -> Result<String, CaptchaError> {
+    async fn fetch_captcha(&self, token: &str) -> Result<String, CaptchaError> {
         let params: [(&str, &str); 2] = [("secret", &self.config.secret), ("response", token)];
 
         self.inner_client
@@ -119,7 +119,7 @@ impl CaptchaClient {
         }
     }
 
-    pub async fn verify(&self, token: &String) -> Result<bool, CaptchaError> {
+    pub async fn verify(&self, token: &str) -> Result<bool, CaptchaError> {
         tracing::trace!("Verify captcha token `{token}`");
 
         let fetched = self.fetch_captcha(token).await?;
