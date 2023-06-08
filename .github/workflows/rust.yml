@@ -36,6 +36,9 @@ jobs:
       - name: Clippy
         if: env.GIT_DIFF
         run: cargo clippy --release
+      - name: Clippy (Tests)
+        if: env.GIT_DIFF
+        run: cargo clippy --tests --release
       - name: Build
         if: env.GIT_DIFF
         run: cargo build --release
