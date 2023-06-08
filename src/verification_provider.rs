@@ -1,6 +1,6 @@
 use crate::{utils, AppError, ExternalAccountId};
 use base64::{engine::general_purpose, Engine};
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, Duration, TimeZone, Utc};
 use near_sdk::{
     borsh::{self, BorshDeserialize, BorshSerialize},
     serde::{
@@ -11,6 +11,9 @@ use near_sdk::{
     serde_json,
 };
 use reqwest::Client;
+
+/// Minimum time required before oauth2 token expires in minutes
+static OAUTH_TOKEN_MINIMUM_LIFETIME: i64 = 5;
 
 #[derive(Deserialize, Debug, Default, Clone)]
 #[serde(crate = "near_sdk::serde", rename_all = "camelCase")]
@@ -178,14 +181,18 @@ impl FractalClient {
         &self,
         fractal_token: FractalTokenKind,
     ) -> Result<FractalUser, AppError> {
-        let oauth_token = match fractal_token {
+        let mut oauth_token = match fractal_token {
             FractalTokenKind::AuthorizationCode {
                 code, redirect_uri, ..
             } => self.acquire_oauth_token(&code, &redirect_uri).await?,
-            // TODO: check if access_token not expired and refresh if needed
             FractalTokenKind::OAuth { token, .. } => token,
         };
-        tracing::trace!("OAuthToken: {oauth_token:?}");
+
+        if oauth_token.requires_refresh() {
+            oauth_token = self.refresh_oauth_token(oauth_token).await?;
+        }
+
+        tracing::trace!("Acquired user token: {oauth_token:?}");
 
         let fetched_res = self
             .inner_client
@@ -227,6 +234,34 @@ impl FractalClient {
             ("code", code),
             ("grant_type", "authorization_code"),
             ("redirect_uri", redirect_uri),
+        ];
+
+        let data = self
+            .inner_client
+            .post(&self.config.request_token_url)
+            .form(&params)
+            .send()
+            .await?
+            .text()
+            .await?;
+
+        tracing::trace!("Acquired raw fractal token response: {data}");
+
+        match serde_json::from_str::<RawFractalToken>(&data) {
+            Ok(token) if token.token_type.as_str() == "Bearer" => Ok(OAuthToken::from(token)),
+            Ok(token) => Err(format!("Unsupported token type {:?}", token).into()),
+            Err(_) => Err(format!("Failed to parse token response {:?}", data).into()),
+        }
+    }
+
+    async fn refresh_oauth_token(&self, oauth_token: OAuthToken) -> Result<OAuthToken, AppError> {
+        tracing::trace!("Refresh for OAuthToken: {oauth_token:?}");
+
+        let params: [(&str, &str); 4] = [
+            ("client_id", &self.config.client_id),
+            ("client_secret", &self.config.client_secret),
+            ("refresh_token", &oauth_token.refresh_token),
+            ("grant_type", "refresh_token"),
         ];
 
         let data = self
@@ -336,6 +371,12 @@ impl TokenLifetime {
     }
 }
 
+impl OAuthToken {
+    pub fn requires_refresh(&self) -> bool {
+        Utc::now() + Duration::minutes(OAUTH_TOKEN_MINIMUM_LIFETIME) >= self.expires_at
+    }
+}
+
 impl From<RawFractalToken> for OAuthToken {
     fn from(token: RawFractalToken) -> Self {
         Self {
@@ -394,27 +435,36 @@ mod tests {
     use near_sdk::serde_json;
 
     #[test]
-    fn test_raw_user_token() {
-        let json = r#"{
+    fn test_oauth_token() {
+        let expires_in = 7200;
+        let now_secs = Utc::now().timestamp();
+        let created_at = now_secs - expires_in; // let it expire now
+        let json = format!(
+            r#"{{
             "access_token": "7rgojfemuk-aq8RcA7xWxJQKv6Ux0VWJ1DQtU6178B8",
             "token_type": "bearer",
-            "expires_in": 7200,
+            "expires_in": {expires_in},
             "refresh_token": "thPSSHGnk3NGU5vV4V_g-Qrs47RibO9KEEhfKYEgJOw",
             "scope": "uid:read email:read",
-            "created_at": 1543585106
-        }"#;
+            "created_at": {created_at}
+        }}"#
+        );
 
-        let raw_token = serde_json::from_str::<RawFractalToken>(json).unwrap();
-        let oauth_token = OAuthToken::from(raw_token);
+        let raw_token = serde_json::from_str::<RawFractalToken>(&json).unwrap();
+        let mut oauth_token = OAuthToken::from(raw_token);
 
         assert_eq!(
             oauth_token,
             OAuthToken {
                 access_token: "7rgojfemuk-aq8RcA7xWxJQKv6Ux0VWJ1DQtU6178B8".to_owned(),
                 refresh_token: "thPSSHGnk3NGU5vV4V_g-Qrs47RibO9KEEhfKYEgJOw".to_owned(),
-                expires_at: Utc.timestamp_nanos(1543592306000000000),
+                expires_at: Utc.timestamp_opt(now_secs, 0).unwrap(),
             }
         );
+
+        assert!(oauth_token.requires_refresh());
+        oauth_token.expires_at = Utc::now() + Duration::days(1);
+        assert!(!oauth_token.requires_refresh());
     }
 
     #[test]
@@ -578,7 +628,7 @@ mod tests {
                     gen_verification_case(
                         Utc::now(),
                         Utc::now(),
-                        VerificationLevelState::KYC(CaseStatus::Done, CredentialStatus::Approved),
+                        VerificationLevelState::Kyc(CaseStatus::Done, CredentialStatus::Approved),
                         true,
                     ),
                 ]),
@@ -591,14 +641,14 @@ mod tests {
                     gen_verification_case(
                         Utc::now() - Duration::days(2),
                         Utc::now() - Duration::days(1),
-                        VerificationLevelState::KYC(CaseStatus::Done, CredentialStatus::Rejected),
+                        VerificationLevelState::Kyc(CaseStatus::Done, CredentialStatus::Rejected),
                         true,
                     ),
                     // approved case
                     gen_verification_case(
                         Utc::now() - Duration::days(3),
                         Utc::now(),
-                        VerificationLevelState::KYC(CaseStatus::Done, CredentialStatus::Approved),
+                        VerificationLevelState::Kyc(CaseStatus::Done, CredentialStatus::Approved),
                         true,
                     ),
                 ]),
@@ -611,7 +661,7 @@ mod tests {
                     gen_verification_case(
                         Utc::now(),
                         Utc::now(),
-                        VerificationLevelState::KYC(CaseStatus::Pending, CredentialStatus::Pending),
+                        VerificationLevelState::Kyc(CaseStatus::Pending, CredentialStatus::Pending),
                         true,
                     ),
                 ]),
@@ -624,14 +674,14 @@ mod tests {
                     gen_verification_case(
                         Utc::now() - Duration::days(2),
                         Utc::now() - Duration::days(1),
-                        VerificationLevelState::KYC(CaseStatus::Done, CredentialStatus::Rejected),
+                        VerificationLevelState::Kyc(CaseStatus::Done, CredentialStatus::Rejected),
                         true,
                     ),
                     // pending case
                     gen_verification_case(
                         Utc::now() - Duration::days(3),
                         Utc::now(),
-                        VerificationLevelState::KYC(
+                        VerificationLevelState::Kyc(
                             CaseStatus::Contacted,
                             CredentialStatus::Pending,
                         ),
@@ -652,7 +702,7 @@ mod tests {
                     gen_verification_case(
                         Utc::now(),
                         Utc::now(),
-                        VerificationLevelState::KYC(CaseStatus::Done, CredentialStatus::Approved),
+                        VerificationLevelState::Kyc(CaseStatus::Done, CredentialStatus::Approved),
                         false,
                     ),
                 ]),
@@ -665,7 +715,7 @@ mod tests {
                     gen_verification_case(
                         Utc::now(),
                         Utc::now(),
-                        VerificationLevelState::KYC(CaseStatus::Done, CredentialStatus::Rejected),
+                        VerificationLevelState::Kyc(CaseStatus::Done, CredentialStatus::Rejected),
                         true,
                     ),
                 ]),
@@ -678,14 +728,14 @@ mod tests {
                     gen_verification_case(
                         Utc::now() - Duration::days(2),
                         Utc::now() - Duration::days(1),
-                        VerificationLevelState::KYC(CaseStatus::Done, CredentialStatus::Rejected),
+                        VerificationLevelState::Kyc(CaseStatus::Done, CredentialStatus::Rejected),
                         true,
                     ),
                     // pending case
                     gen_verification_case(
                         Utc::now() - Duration::days(3),
                         Utc::now(),
-                        VerificationLevelState::KYC(CaseStatus::Done, CredentialStatus::Rejected),
+                        VerificationLevelState::Kyc(CaseStatus::Done, CredentialStatus::Rejected),
                         true,
                     ),
                 ]),
@@ -802,7 +852,7 @@ mod tests {
 
     enum VerificationLevelState {
         Uniqueness(CaseStatus, CredentialStatus),
-        KYC(CaseStatus, CredentialStatus),
+        Kyc(CaseStatus, CredentialStatus),
     }
 
     fn gen_verification_case(
@@ -815,7 +865,7 @@ mod tests {
             VerificationLevelState::Uniqueness(status, credential) => {
                 (vec![VerificationLevel::Uniqueness], status, credential)
             }
-            VerificationLevelState::KYC(status, credential) => (
+            VerificationLevelState::Kyc(status, credential) => (
                 vec![VerificationLevel::Basic, VerificationLevel::Liveness],
                 status,
                 credential,
