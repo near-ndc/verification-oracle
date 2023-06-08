@@ -146,10 +146,9 @@ mod tests {
                     "success": true,
                     "score": 0.9,
                     "action": "homepage",
-                    "challenge_ts": "{}",
+                    "challenge_ts": "{now}",
                     "hostname": "http://some_url"
-                }}"#,
-                now.to_string()
+                }}"#
             )),
             Ok(CaptchaResponse { score, .. }) if score == 0.9
         );
@@ -166,10 +165,9 @@ mod tests {
                     "success": false,
                     "score": 0.0,
                     "action": "homepage",
-                    "challenge_ts": "{}",
+                    "challenge_ts": "{now}",
                     "hostname": "http://some_url"
                 }}"#,
-                now.to_string()
             )),
             Err(CaptchaError::ResponseError(CaptchaErrorCode::BadRequest))
         );
@@ -186,10 +184,9 @@ mod tests {
                     "success": true,
                     "score": 0.0,
                     "action": "test",
-                    "challenge_ts": "{}",
+                    "challenge_ts": "{now}",
                     "hostname": "http://some_url"
                 }}"#,
-                now.to_string()
             )),
             Err(CaptchaError::InvalidAction)
         );
