@@ -7,6 +7,10 @@ services:
       - ./verification-oracle
     ports:
       - 8081:8081
+    logging:
+      options:
+        max-size: 250m
+        max-file: 3
     extra_hosts: []
     volumes:
       - type: bind
@@ -29,6 +33,10 @@ services:
       - ./verification-oracle
     ports:
       - 8080:8080
+    logging:
+      options:
+        max-size: 250m
+        max-file: 3
     extra_hosts: []
     volumes:
       - type: bind
