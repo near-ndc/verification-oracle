@@ -1,7 +1,7 @@
 version: "3.5"
 services:
   verification-oracle-staging:
-    image: localhost:5000/verification-oracle
+    image: ghcr.io/near-ndc/verification-oracle:develop
     restart: always
     command:
       - ./verification-oracle
@@ -27,7 +27,7 @@ services:
       RUST_LOG: debug
     init: false
   verification-oracle-production:
-    image: localhost:5000/verification-oracle
+    image: ghcr.io/near-ndc/verification-oracle:main
     restart: always
     command:
       - ./verification-oracle
