@@ -6,11 +6,11 @@ mod utils;
 mod verification_provider;
 
 use axum::{extract::State, routing::post, Json, Router};
-use base64::{engine::general_purpose, Engine};
 use captcha::CaptchaClient;
 use chrono::Utc;
 use error::AppError;
 use near_crypto::Signature;
+use near_sdk::base64::encode;
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::serde::{Deserialize, Serialize};
 use near_sdk::AccountId;
@@ -37,7 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Log a base64 encoded ed25519 public key to be used in smart contract for signature verification
     tracing::info!(
         "ED25519 public key (base64 encoded): {}",
-        general_purpose::STANDARD.encode(
+        encode(
             config
                 .signer
                 .credentials
@@ -217,8 +217,8 @@ fn create_approved_response(
         _ => return Err(AppError::SigningError),
     };
 
-    let message = general_purpose::STANDARD.encode(&raw_message);
-    let signature_ed25519 = general_purpose::STANDARD.encode(raw_signature_ed25519);
+    let message = encode(&raw_message);
+    let signature_ed25519 = encode(raw_signature_ed25519);
 
     Ok(VerificationResponse::Approved(ApprovedResponse {
         message,
@@ -232,9 +232,9 @@ mod tests {
     use crate::signer::{SignerConfig, SignerCredentials};
     use crate::*;
     use assert_matches::assert_matches;
-    use base64::{engine::general_purpose, Engine};
     use chrono::Utc;
     use near_crypto::{KeyType, Signature};
+    use near_sdk::base64::decode;
     use near_sdk::borsh::{BorshDeserialize, BorshSerialize};
     use near_sdk::AccountId;
     use std::str::FromStr;
@@ -263,15 +263,11 @@ mod tests {
 
         let credentials = &config.signer.credentials;
 
-        let decoded_bytes = general_purpose::STANDARD
-            .decode(&approved_res.message)
-            .unwrap();
+        let decoded_bytes = decode(&approved_res.message).unwrap();
 
         assert!(Signature::from_parts(
             KeyType::ED25519,
-            &general_purpose::STANDARD
-                .decode(&approved_res.signature_ed25519)
-                .unwrap()
+            &decode(&approved_res.signature_ed25519).unwrap()
         )
         .unwrap()
         .verify(&decoded_bytes, &credentials.signing_key.public_key()));
@@ -310,15 +306,11 @@ mod tests {
 
         let credentials = &config.signer.credentials;
 
-        let decoded_bytes = general_purpose::STANDARD
-            .decode(&approved_res.message)
-            .unwrap();
+        let decoded_bytes = decode(&approved_res.message).unwrap();
 
         assert!(Signature::from_parts(
             KeyType::ED25519,
-            &general_purpose::STANDARD
-                .decode(&approved_res.signature_ed25519)
-                .unwrap()
+            &decode(&approved_res.signature_ed25519).unwrap()
         )
         .unwrap()
         .verify(&decoded_bytes, &credentials.signing_key.public_key()));

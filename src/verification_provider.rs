@@ -1,7 +1,7 @@
 use crate::{utils, AppError, ExternalAccountId};
-use base64::{engine::general_purpose, Engine};
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use near_sdk::{
+    base64::{decode, encode},
     borsh::{self, BorshDeserialize, BorshSerialize},
     serde::{
         de::{self, Deserializer},
@@ -342,7 +342,7 @@ impl<'de> Deserialize<'de> for OAuthToken {
     {
         let encoded: String = Deserialize::deserialize(deserializer)?;
 
-        let raw = general_purpose::STANDARD.decode(encoded).map_err(|e| {
+        let raw = decode(encoded).map_err(|e| {
             de::Error::custom(format!(
                 "Failed to deserialize base64 encoded oauth token {e:?}"
             ))
@@ -395,7 +395,7 @@ impl Serialize for OAuthToken {
         let raw = self
             .try_to_vec()
             .map_err(|e| ser::Error::custom(format!("Failed to serialize oauth token {e:?}")))?;
-        let encoded = general_purpose::STANDARD.encode(raw);
+        let encoded = encode(raw);
 
         serializer.serialize_str(&encoded)
     }
