@@ -1,6 +1,7 @@
 use crate::{utils, AppError, ExternalAccountId};
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use near_sdk::{
+    base64::{decode, encode},
     borsh::{self, BorshDeserialize, BorshSerialize},
     serde::{
         de::{self, Deserializer},
@@ -8,7 +9,6 @@ use near_sdk::{
         Deserialize, Serialize,
     },
     serde_json,
-    base64::{encode, decode}
 };
 use reqwest::Client;
 

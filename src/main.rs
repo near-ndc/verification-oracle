@@ -10,10 +10,10 @@ use captcha::CaptchaClient;
 use chrono::Utc;
 use error::AppError;
 use near_crypto::Signature;
+use near_sdk::base64::encode;
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::serde::{Deserialize, Serialize};
 use near_sdk::AccountId;
-use near_sdk::base64::encode;
 use tower_http::cors::CorsLayer;
 use uuid::Uuid;
 
@@ -234,9 +234,9 @@ mod tests {
     use assert_matches::assert_matches;
     use chrono::Utc;
     use near_crypto::{KeyType, Signature};
+    use near_sdk::base64::decode;
     use near_sdk::borsh::{BorshDeserialize, BorshSerialize};
     use near_sdk::AccountId;
-    use near_sdk::base64::{decode};
     use std::str::FromStr;
     use uuid::Uuid;
 
@@ -263,8 +263,7 @@ mod tests {
 
         let credentials = &config.signer.credentials;
 
-        let decoded_bytes = decode(&approved_res.message)
-            .unwrap();
+        let decoded_bytes = decode(&approved_res.message).unwrap();
 
         assert!(Signature::from_parts(
             KeyType::ED25519,
