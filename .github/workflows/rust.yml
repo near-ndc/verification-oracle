@@ -13,11 +13,13 @@ env:
 
 jobs:
   fmt:
+    timeout-minutes: 60
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
       - run: cargo fmt --all --check
   test:
+    timeout-minutes: 60
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
